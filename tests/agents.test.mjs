@@ -40,6 +40,14 @@ test("a finished one has its end and no tool", () => {
   assert.equal(agent.tool, null);
 });
 
+test("model and effort read together", () => {
+  const [agent] = agentsFromRows([
+    delegation({ presentation: { detail: "general-purpose agent · model sonnet 5.5 · effort medium" } }),
+  ]);
+  assert.equal(agent.kind, "general-purpose agent");
+  assert.equal(agent.model, "sonnet 5.5 · medium");
+});
+
 test("tool words", () => {
   assert.equal(toolWord({ workKind: "tool", toolName: "WebFetch" }), "WebFetch");
   assert.equal(toolWord({ workKind: "file-read" }), "Read");

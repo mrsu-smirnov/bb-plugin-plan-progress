@@ -60,16 +60,17 @@ export function toolWord(row: Row): string | null {
   return TOOL_WORDS[kind] ?? name ?? kind;
 }
 
-/** "Explore agent · model haiku" → kind and model. */
+/** "Explore agent · model haiku · effort medium" → kind, and "haiku · medium" for the model. */
 function parseDetail(detail: string | null): { kind: string | null; model: string | null } {
   let kind: string | null = null;
-  let model: string | null = null;
+  const model: string[] = [];
   for (const part of (detail ?? "").split("·").map((piece) => piece.trim())) {
     if (part === "") continue;
-    if (/^model\s+/i.test(part)) model = part.replace(/^model\s+/i, "");
-    else kind ??= part;
+    if (/^(model|effort|reasoning)\s+/i.test(part)) model.push(part.replace(/^\S+\s+/, ""));
+    else if (kind === null) kind = part;
+    else model.push(part);
   }
-  return { kind, model };
+  return { kind, model: model.length === 0 ? null : model.join(" · ") };
 }
 
 function stateOf(status: unknown): AgentState {

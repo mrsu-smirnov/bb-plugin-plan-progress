@@ -520,32 +520,48 @@ function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effect
   );
 }
 
+function Robot() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M12 8V4H8M2 14h2M20 14h2M15 13v2M9 13v2" />
+    </svg>
+  );
+}
+
+/** One line per agent: the robot and its number under the title, the strip under the track. */
 function AgentStrips({ agents, now, effects }: { agents: Agent[]; now: number; effects: boolean }) {
   const [folded, setFolded] = useState(false);
-  return (
-    <div className="mt-1.5 flex items-start gap-3">
-      {/* under the glyph and the title: the robot and how many */}
+  const toggle = (
+    number: number,
+  ) => (
+    <button
+      type="button"
+      onClick={() => setFolded(!folded)}
+      aria-expanded={!folded}
+      title={folded ? "Show agents" : "Fold agents"}
+      className="flex h-[20px] w-[24%] min-w-0 max-w-[16rem] shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground hover:text-foreground"
+    >
+      <Robot />
+      <span className="tabular-nums">{number}</span>
+    </button>
+  );
+  const line = (key: string, number: number, strip: React.ReactNode) => (
+    <div key={key} className="flex items-center gap-3">
       <span className="size-3.5 shrink-0" />
-      <button
-        type="button"
-        onClick={() => setFolded(!folded)}
-        aria-expanded={!folded}
-        title={folded ? "Show agents" : "Fold agents"}
-        className="flex h-[20px] w-[24%] min-w-0 max-w-[16rem] shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground hover:text-foreground"
-      >
-        <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect width="16" height="12" x="4" y="8" rx="2" />
-          <path d="M12 8V4H8M2 14h2M20 14h2M15 13v2M9 13v2" />
-        </svg>
-        <span className="tabular-nums">{agents.length}</span>
-      </button>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        {folded
-          ? null
-          : agents.map((agent) => <AgentStrip key={agent.id} agent={agent} now={now} effects={effects} />)}
-      </div>
+      {toggle(number)}
+      <div className="min-w-0 flex-1">{strip}</div>
       {/* under the percent and the two buttons */}
       <span className="w-[5.25rem] shrink-0" />
+    </div>
+  );
+  return (
+    <div className="mt-1.5 flex flex-col gap-1">
+      {folded
+        ? line("folded", agents.length, null)
+        : agents.map((agent, index) =>
+            line(agent.id, index + 1, <AgentStrip agent={agent} now={now} effects={effects} />),
+          )}
     </div>
   );
 }

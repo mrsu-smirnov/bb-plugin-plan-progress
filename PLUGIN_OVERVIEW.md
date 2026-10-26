@@ -5,7 +5,7 @@
 - A row for each subagent under the bar: its description, model, the tool it is in right now, and its time. Background subagents count too. Finished rows fold away after a few seconds.
 - The arrow beside the percent opens the step list with the time of every step. The cross closes a bar.
 - The plan can change mid-task: finished steps keep their done by title.
-- The answer speed in the message box while the agent works, `⚡ ≈ 42 tok/s`: an estimate from the text it writes over the latest minute, exact after the turn when bb reports the tokens.
+- The answer speed in the message box, `⚡ ≈ 42 tok/s`: bright while the agent writes, dimmed with the last figure between turns. An estimate from the text it writes over the latest minute, exact after the turn when bb reports the tokens.
 
 ## How it works
 

@@ -102,7 +102,7 @@ export default async function plugin(bb: BbPluginApi) {
     speed: {
       type: "boolean",
       label: "Answer speed",
-      description: "≈ tok/s in the message box while the agent works: estimated from the text it writes, exact after the turn when bb reports the tokens.",
+      description: "≈ tok/s in the message box, bright while the agent writes: estimated from the text it writes, exact after the turn when bb reports the tokens.",
       default: true,
     },
     sounds: {

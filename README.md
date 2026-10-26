@@ -44,10 +44,11 @@ The protocol is in [skills/plan-progress/SKILL.md](skills/plan-progress/SKILL.md
 
 ### Answer speed
 
-While the agent works, `⚡ ≈ 42 tok/s` stands in the message box before the
-voice and send buttons, and leaves a few seconds after the turn. It is the
-average over the latest minute of writing; the time a tool runs does not
-count, and subagents do not count.
+`⚡ ≈ 42 tok/s` stands in the message box before the voice and send buttons,
+as in the original: bright while the model writes, dimmed with the last
+figure while a tool runs and between turns. It is the average over the latest
+minute of writing; the time a tool runs does not count, and subagents do not
+count.
 
 It is an estimate, as the original's live figure is: BB tells a plugin the
 exact output tokens only at the end of the agent's run, and Claude Code hands
@@ -80,7 +81,7 @@ Configuration. Or from a terminal: `bb plugin config plan-progress set <key> <va
 | Effects: twinkling dots in the bar | `effects` | on |
 | Auto-close: a finished bar leaves on its own | `autoClose` | off |
 | Stays for: 10, 30 or 60 s before it leaves | `autoCloseSeconds` | 30 |
-| Answer speed: ≈ tok/s in the message box while the agent works | `speed` | on |
+| Answer speed: ≈ tok/s in the message box | `speed` | on |
 | Sounds: a chime on a question, an error and the finish | `sounds` | off |
 
 ## License

@@ -41,6 +41,8 @@ export type Speed = {
   rate: number | null;
   /** The figure stands on the exact output tokens, not on the estimate. */
   exact: boolean;
+  /** The model is writing now: no tool runs and the turn is not over. Shown bright, otherwise dimmed. */
+  live: boolean;
 };
 
 const HISTORY_MS = 60_000;
@@ -243,7 +245,11 @@ export class SpeedMeter {
       ms += part.ms;
     }
     const tokens = window.reduce((sum, part) => sum + part.tokens, 0);
-    return { rate: ms >= 1000 ? tokens / (ms / 1000) : null, exact: this.isExact && live.length === 0 };
+    return {
+      rate: ms >= 1000 ? tokens / (ms / 1000) : null,
+      exact: this.isExact && live.length === 0,
+      live: this.from !== null,
+    };
   }
 }
 

@@ -13,7 +13,7 @@ test("a block landing at once was written during the silence before it", () => {
   const m = new SpeedMeter([0.5]);
   feed(m, [ev("turn/started", 0), started({ type: "agentMessage", id: "a" }, 3000), text("a", 4000, "x".repeat(400))]);
   // 400 chars × 0.5 over 4 s
-  assert.deepEqual(m.speed(), { rate: 50, exact: false });
+  assert.deepEqual(m.speed(), { rate: 50, exact: false, live: true });
 });
 
 test("the time a tool runs is not writing", () => {
@@ -59,11 +59,11 @@ test("the exact count replaces the estimate and teaches the ratio", () => {
     ev("thread/tokenUsage/updated", 10_100, { tokenUsage: { last: { outputTokens: 600 } } }),
     ev("turn/completed", 10_100),
   ]);
-  assert.deepEqual(m.speed(), { rate: 60, exact: true });
+  assert.deepEqual(m.speed(), { rate: 60, exact: true, live: false });
   assert.deepEqual(m.learned(), [0.6]);
   // the next turn's estimate uses what was learned, and is an estimate again
   feed(m, [ev("turn/started", 20_000), text("b", 30_000, "x".repeat(1000))]);
-  assert.deepEqual(m.speed(), { rate: 60, exact: false });
+  assert.deepEqual(m.speed(), { rate: 60, exact: false, live: true });
 });
 
 test("the average is over the latest minute of writing", () => {
@@ -76,7 +76,20 @@ test("the average is over the latest minute of writing", () => {
 test("nothing before a second of writing; the label marks an estimate", () => {
   const m = new SpeedMeter();
   assert.equal(m.speed().rate, null);
-  assert.equal(speedLabel({ rate: null, exact: false }), "⚡ – tok/s");
-  assert.equal(speedLabel({ rate: 7.25, exact: false }), "⚡ ≈ 7.3 tok/s");
-  assert.equal(speedLabel({ rate: 42.4, exact: true }), "⚡ 42 tok/s");
+  assert.equal(speedLabel({ rate: null, exact: false, live: false }), "⚡ – tok/s");
+  assert.equal(speedLabel({ rate: 7.25, exact: false, live: true }), "⚡ ≈ 7.3 tok/s");
+  assert.equal(speedLabel({ rate: 42.4, exact: true, live: false }), "⚡ 42 tok/s");
+});
+
+test("the figure dims while a tool runs and after the turn, and keeps its value", () => {
+  const m = new SpeedMeter([1]);
+  const tool = { type: "commandExecution", id: "c", command: "ls" };
+  feed(m, [ev("turn/started", 0), text("a", 2000, "x".repeat(200)), started(tool, 2000)]);
+  assert.equal(m.speed().live, false);
+  feed(m, [completed(tool, 9000)]);
+  assert.equal(m.speed().live, true);
+  feed(m, [text("b", 11_000, "x".repeat(200)), ev("turn/completed", 11_000)]);
+  const after = m.speed();
+  assert.equal(after.live, false);
+  assert.ok(after.rate > 0);
 });

@@ -763,8 +763,7 @@ function Banner() {
 // ---------- the answer speed ----------
 
 const RATIOS_KEY = "plan-progress:tokens-per-char";
-/** The figure stays this long after the turn, then leaves. */
-const SPEED_TAIL_MS = 5_000;
+const NO_SPEED: Speed = { rate: null, exact: false, live: false };
 // the most bb hands out per request
 const PAGE = 100;
 
@@ -852,31 +851,23 @@ function useSpeed(threadId: string | null, enabled: boolean): Speed | null {
   return speed;
 }
 
-/** "⚡ ≈ 42 tok/s" before the voice and send buttons while the agent works, and a few seconds after. */
+/**
+ * "⚡ ≈ 42 tok/s" before the voice and send buttons, always there as in the
+ * original: bright while the model writes, dimmed with the last figure while a
+ * tool runs and between turns, "–" before a second of writing.
+ */
 function SpeedFigure() {
   const composer = useComposer();
   const threadId = composer.scope.kind === "thread" ? composer.scope.threadId : null;
   const options = useOptions();
-  const running = composer.isRunning;
-  const [tail, setTail] = useState(false);
-  const wasRunning = useRef(running);
-  useEffect(() => {
-    if (wasRunning.current && !running) {
-      setTail(true);
-      const timer = setTimeout(() => setTail(false), SPEED_TAIL_MS);
-      wasRunning.current = running;
-      return () => clearTimeout(timer);
-    }
-    wasRunning.current = running;
-    if (running) setTail(false);
-  }, [running]);
-  const speed = useSpeed(threadId, options.speed);
-  if (!options.speed || speed === null || (!running && !tail)) return null;
+  const speed = useSpeed(threadId, options.speed) ?? NO_SPEED;
+  if (!options.speed || threadId === null) return null;
+  const isBright = composer.isRunning && speed.live;
   return (
     <span
       className={cn(
-        "self-center whitespace-nowrap px-1 text-xs tabular-nums text-muted-foreground transition-opacity",
-        speed.rate === null && "opacity-60",
+        "self-center whitespace-nowrap px-1 text-xs tabular-nums transition-opacity",
+        isBright ? "text-foreground" : "text-muted-foreground opacity-70",
       )}
       title={
         speed.exact

@@ -154,7 +154,7 @@ export default async function plugin(bb: BbPluginApi) {
       includeNestedRows: "true",
       segmentLimit: "1",
     });
-    return agentsFromRows(timeline.rows);
+    return agentsFromRows(timeline.rows, timeline.activeBackgroundCommands);
   }
   async function refreshAgents(threadId: string): Promise<void> {
     if (refreshing.has(threadId)) {
@@ -297,6 +297,11 @@ export default async function plugin(bb: BbPluginApi) {
           return result.ok
             ? { exitCode: 0, stdout: result.text }
             : { exitCode: 1, stderr: result.text };
+        }
+        case "raw": {
+          // debugging aid, not in help: the latest timeline segment as bb hands it over
+          const timeline = await bb.sdk.threads.timeline({ threadId, includeNestedRows: "true", segmentLimit: "1" });
+          return { exitCode: 0, stdout: JSON.stringify(timeline).slice(0, 400_000) };
         }
         case "agents": {
           const agents = await readAgents(threadId);

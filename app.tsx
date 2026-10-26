@@ -31,10 +31,20 @@ import { cn } from "@/lib/utils";
 
 // ---------- data ----------
 
+const NO_BARS: Bar[] = [];
+
 /** The thread's bars, kept current by the server's realtime signal. */
 function useBars(threadId: string | null): Bar[] {
   const rpc = useRpc<typeof rpcContract>();
-  const [bars, setBars] = useState<Bar[]>([]);
+  // the bars remember their thread, so a render right after a switch never shows (or auto-closes) another thread's
+  const [loaded, setLoaded] = useState<{ threadId: string; bars: Bar[] } | null>(null);
+  const bars = loaded !== null && loaded.threadId === threadId ? loaded.bars : NO_BARS;
+  const setBars = useCallback(
+    (next: Bar[]) => {
+      if (threadId !== null) setLoaded({ threadId, bars: next });
+    },
+    [threadId],
+  );
   // only the latest request may land: an older answer, or one for the thread shown before, is dropped
   const latest = useRef(0);
   const refetch = useCallback(() => {
@@ -46,9 +56,8 @@ function useBars(threadId: string | null): Bar[] {
       },
       () => undefined,
     );
-  }, [rpc, threadId]);
+  }, [rpc, threadId, setBars]);
   useEffect(() => {
-    setBars([]);
     refetch();
   }, [refetch]);
   useRealtime(BARS_CHANGED, (payload) => {
@@ -330,7 +339,14 @@ function Track({ bar, now, effects }: { bar: Bar; now: number; effects: boolean 
   const passedMark = rgb(mix(light, WHITE, 0.45), 0.9);
 
   return (
-    <div className="pp-track relative h-[22px] min-w-0 flex-1">
+    <div
+      className="pp-track relative h-[22px] min-w-0 flex-1"
+      role="progressbar"
+      aria-label={`${bar.title}: ${STATE_LABEL[bar.state]}${where.step === undefined ? "" : `, ${where.step.title}`}`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(fill * 100)}
+    >
       <div className="absolute inset-0 overflow-hidden rounded-full" style={{ backgroundColor: "rgba(128,128,128,.16)" }}>
         <div
           className="pp-glide absolute inset-y-0 left-0 overflow-hidden"

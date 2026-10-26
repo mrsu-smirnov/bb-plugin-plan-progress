@@ -61,3 +61,35 @@ test("finished agents fold away after a while", () => {
   const mixed = agentsFromRows([delegation({ callId: "old", status: "completed", completedAt: 5000 }), delegation()]);
   assert.deepEqual(visibleAgents(mixed, 10_000_000, 30_000).map((agent) => agent.id), ["c1"]);
 });
+
+test("a background agent runs while bb lists it as active", () => {
+  const launched = delegation({
+    callId: "bg",
+    status: "completed",
+    completedAt: 1100,
+    background: true,
+    childRows: [{ kind: "work", workKind: "file-read", status: "pending", startedAt: 1200 }],
+  });
+  const active = [{ taskType: "local_agent", description: "Разбор плана", startedAt: 1050, itemId: "t1" }];
+  const [running] = agentsFromRows([launched], active);
+  assert.equal(running.state, "running");
+  assert.equal(running.tool, "Read");
+  assert.equal(running.endedAt, null);
+
+  const finished = delegation({
+    callId: "bg",
+    status: "completed",
+    completedAt: 1100,
+    background: true,
+    childRows: [{ kind: "work", workKind: "tool", toolName: "SubagentHandback", status: "completed", startedAt: 8000, completedAt: 9000 }],
+  });
+  const [done] = agentsFromRows([finished], []);
+  assert.equal(done.state, "done");
+  assert.equal(done.endedAt, 9000);
+});
+
+test("an active background agent without its launch row still gets a strip", () => {
+  const agents = agentsFromRows([], [{ taskType: "local_agent", description: "Старый", startedAt: 5, itemId: "t9" }]);
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].state, "running");
+});

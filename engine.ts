@@ -145,12 +145,17 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
     delete step.endedAt;
     if (to === "active") step.startedAt = now;
   };
-  const activate = (step: Step) => reopen(step, "active");
+  // a step already in progress keeps its clock
+  const activate = (step: Step) => {
+    if (step.status !== "active") reopen(step, "active");
+  };
   // a title used twice means the one still open
   const find = (title: string) => {
+    // stored titles are clipped, so the asked one is clipped the same way
+    const asked = clip(title, LIMITS.step);
     const found =
-      steps.find((step) => same(step.title, title) && !isFinished(step.status)) ??
-      steps.find((step) => same(step.title, title));
+      steps.find((step) => same(step.title, asked) && !isFinished(step.status)) ??
+      steps.find((step) => same(step.title, asked));
     if (found === undefined) missing.push(title);
     return found;
   };

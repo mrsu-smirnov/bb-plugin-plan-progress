@@ -196,3 +196,14 @@ test("the input is never mutated", () => {
   applyOp(bars, next, 9);
   assert.equal(JSON.stringify(bars), before);
 });
+
+test("a long title is found by the same long text", () => {
+  const long = "Шаг ".repeat(40).trim();
+  const { bar } = run([{ id: "l", title: "Длинный", steps: [{ title: "Первый" }, { title: long }] }, { id: "l", active: long }]);
+  assert.equal(bar.stages[0].steps[1].status, "active");
+});
+
+test("naming the active step again keeps its clock", () => {
+  const { bar } = run([plan, { id: "auth", active: "Таблицы" }]);
+  assert.equal(bar.stages[0].steps[0].startedAt, 1000);
+});

@@ -32,6 +32,10 @@ interface Row {
   startedAt?: unknown;
   completedAt?: unknown;
   childRows?: unknown;
+  background?: unknown;
+  taskType?: unknown;
+  taskStatus?: unknown;
+  itemId?: unknown;
   presentation?: { title?: unknown; detail?: unknown } | null;
 }
 
@@ -79,44 +83,97 @@ function stateOf(status: unknown): AgentState {
   return "error";
 }
 
-function toAgent(row: Row): Agent | null {
+/** The tool the agent is in: its last pending child row, else its last one. */
+function currentTool(row: Row): string | null {
+  if (!Array.isArray(row.childRows)) return null;
+  const children = row.childRows as Row[];
+  const current = [...children].reverse().find((child) => child.status === "pending") ?? children.at(-1);
+  return current === undefined ? null : toolWord(current);
+}
+
+/** When an agent's own work last ended: its last child row, for a background agent. */
+function lastActivity(row: Row): number | null {
+  if (!Array.isArray(row.childRows)) return null;
+  const ends = (row.childRows as Row[]).map((child) => time(child.completedAt) ?? time(child.startedAt) ?? 0);
+  return ends.length === 0 ? null : Math.max(...ends);
+}
+
+/**
+ * A delegation row. A background one closes as soon as the agent is launched;
+ * whether it still works is in `running` (bb's active background tasks, by
+ * description), and its end is its last child row.
+ */
+function toAgent(row: Row, running: Map<string, number>): Agent | null {
   const id = text(row.callId) ?? text(row.id);
   const startedAt = time(row.startedAt);
   if (id === null || startedAt === null) return null;
   const { kind, model } = parseDetail(text(row.presentation?.detail));
-  const state = stateOf(row.status);
-  let tool: string | null = null;
-  if (state === "running" && Array.isArray(row.childRows)) {
-    const children = row.childRows as Row[];
-    const current = [...children].reverse().find((child) => child.status === "pending") ?? children.at(-1);
-    tool = current === undefined ? null : toolWord(current);
+  const name = text(row.description) ?? text(row.presentation?.title) ?? "Agent";
+  let state = stateOf(row.status);
+  let endedAt = state === "running" ? null : time(row.completedAt);
+  if (row.background === true) {
+    const left = running.get(name) ?? 0;
+    if (left > 0) {
+      running.set(name, left - 1);
+      state = "running";
+      endedAt = null;
+    } else if (state === "done") {
+      endedAt = lastActivity(row) ?? endedAt;
+    }
   }
   return {
     id,
-    name: text(row.description) ?? text(row.presentation?.title) ?? "Agent",
+    name,
     kind: text(row.subagentType) ?? kind,
     model,
     state,
-    tool,
+    tool: state === "running" ? currentTool(row) : null,
     startedAt,
-    endedAt: state === "running" ? null : time(row.completedAt),
+    endedAt,
   };
 }
 
-/** Every delegation among the rows (nested ones included), oldest first. */
-export function agentsFromRows(rows: readonly unknown[]): Agent[] {
+/**
+ * Every delegation among the rows, oldest first. `active` is bb's list of
+ * background work still going (the timeline's `activeBackgroundCommands`);
+ * an agent there with no delegation row in sight gets a strip of its own.
+ */
+export function agentsFromRows(rows: readonly unknown[], active: readonly unknown[] = []): Agent[] {
+  const running = new Map<string, number>();
+  const orphans: Row[] = [];
+  for (const item of active) {
+    if (item === null || typeof item !== "object") continue;
+    const task = item as Row;
+    const description = text(task.description) ?? text(task.presentation?.title);
+    if (task.taskType !== "local_agent" || description === null) continue;
+    running.set(description, (running.get(description) ?? 0) + 1);
+    orphans.push(task);
+  }
   const found: Agent[] = [];
-  const walk = (list: readonly unknown[]) => {
-    for (const item of list) {
-      if (item === null || typeof item !== "object") continue;
-      const row = item as Row;
-      if (row.kind === "work" && row.workKind === "delegation") {
-        const agent = toAgent(row);
-        if (agent !== null) found.push(agent);
-      }
-    }
-  };
-  walk(rows);
+  for (const item of rows) {
+    if (item === null || typeof item !== "object") continue;
+    const row = item as Row;
+    if (row.kind !== "work" || row.workKind !== "delegation") continue;
+    const agent = toAgent(row, running);
+    if (agent !== null) found.push(agent);
+  }
+  for (const task of orphans) {
+    const description = text(task.description) ?? text(task.presentation?.title)!;
+    const left = running.get(description) ?? 0;
+    const startedAt = time(task.startedAt);
+    if (left === 0 || startedAt === null) continue;
+    running.set(description, left - 1);
+    found.push({
+      id: text(task.itemId) ?? text(task.id) ?? description,
+      name: description,
+      kind: "background agent",
+      model: null,
+      state: "running",
+      tool: null,
+      startedAt,
+      endedAt: null,
+    });
+  }
   return found.sort((a, b) => a.startedAt - b.startedAt);
 }
 

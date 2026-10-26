@@ -13,7 +13,7 @@ BB agent.
 ## Install
 
 ```bash
-bb plugin install <path-or-git-url>
+bb plugin install https://github.com/mrsu-smirnov/bb-plugin-plan-progress.git
 ```
 
 Agent tools reach a thread when its session starts: start a new thread, or

@@ -50,6 +50,12 @@
   },
   "description": "Live progress bars for agent tasks in BB, after zycck's plan-progress mod for Claude Code.",
   "license": "MIT",
+  "author": "Yuri Smirnov (https://github.com/mrsu-smirnov)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mrsu-smirnov/bb-plugin-plan-progress.git"
+  },
+  "homepage": "https://github.com/mrsu-smirnov/bb-plugin-plan-progress#readme",
   "scripts": {
     "test": "node --experimental-strip-types --no-warnings --test tests/*.test.mjs",
     "typecheck": "tsc",

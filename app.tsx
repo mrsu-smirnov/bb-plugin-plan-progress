@@ -765,7 +765,8 @@ function Banner() {
 const RATIOS_KEY = "plan-progress:tokens-per-char";
 /** The figure stays this long after the turn, then leaves. */
 const SPEED_TAIL_MS = 5_000;
-const PAGE = 500;
+// the most bb hands out per request
+const PAGE = 100;
 
 function loadRatios(): number[] {
   try {

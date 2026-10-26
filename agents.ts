@@ -120,11 +120,11 @@ export function agentsFromRows(rows: readonly unknown[]): Agent[] {
   return found.sort((a, b) => a.startedAt - b.startedAt);
 }
 
-/** The agents worth a strip: running ones, and finished ones for `keepMs` after they ended (an error four times that). */
+/** The agents worth a strip: running ones, and finished ones for `keepMs` after they ended (an error 24 times that). */
 export function visibleAgents(agents: readonly Agent[], now: number, keepMs: number): Agent[] {
   return agents.filter((agent) => {
     if (agent.state === "running") return true;
-    const keep = agent.state === "error" ? keepMs * 4 : keepMs;
+    const keep = agent.state === "error" ? keepMs * 24 : keepMs;
     return now - (agent.endedAt ?? agent.startedAt) < keep;
   });
 }

@@ -35,10 +35,15 @@ import { cn } from "@/lib/utils";
 function useBars(threadId: string | null): Bar[] {
   const rpc = useRpc<typeof rpcContract>();
   const [bars, setBars] = useState<Bar[]>([]);
+  // only the latest request may land: an older answer, or one for the thread shown before, is dropped
+  const latest = useRef(0);
   const refetch = useCallback(() => {
     if (threadId === null) return;
+    const ticket = ++latest.current;
     rpc.call("bars_get", { threadId }).then(
-      (result) => setBars(result.bars),
+      (result) => {
+        if (ticket === latest.current) setBars(result.bars);
+      },
       () => undefined,
     );
   }, [rpc, threadId]);
@@ -115,16 +120,16 @@ function elapsed(ms: number): string {
 // ---------- colours (the original's) ----------
 
 const STATE_COLOR: Record<BarState, string> = {
-  working: "#7858CA",
+  running: "#7858CA",
   needs_input: "#AD6400",
-  failed: "#C5353E",
+  error: "#C5353E",
   done: "#18883A",
 };
 
 const STATE_LABEL: Record<BarState, string> = {
-  working: "Working",
+  running: "Working",
   needs_input: "Needs your answer",
-  failed: "Error",
+  error: "Error",
   done: "Done",
 };
 
@@ -195,7 +200,7 @@ function mask(image: string, extra: CSSProperties = {}): CSSProperties {
 }
 
 function Stream({ bar, light, effects }: { bar: Bar; light: Rgb; effects: boolean }) {
-  const speed = bar.state === "working" ? SPEED : SPEED / 2;
+  const speed = bar.state === "running" ? SPEED : SPEED / 2;
   const dots: CSSProperties = {
     position: "absolute",
     inset: 0,
@@ -246,7 +251,7 @@ function Stream({ bar, light, effects }: { bar: Bar; light: Rgb; effects: boolea
 
 const ICON_PATH: Partial<Record<BarState, string>> = {
   needs_input: "M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01",
-  failed: "M18 6 6 18M6 6l12 12",
+  error: "M18 6 6 18M6 6l12 12",
   done: "M20 6 9 17l-5-5",
 };
 
@@ -255,7 +260,7 @@ function head(bar: Bar) {
   const steps = allSteps(bar);
   const total = steps.length;
   const done = steps.filter((step) => step.status === "done").length;
-  let index = steps.findIndex((step) => step.status === "active" || step.status === "failed");
+  let index = steps.findIndex((step) => step.status === "active" || step.status === "error");
   if (index === -1) index = steps.findIndex((step) => step.status === "pending");
   let start = 0;
   let stage = bar.stages.length - 1;
@@ -318,7 +323,7 @@ function Track({ bar, now, effects }: { bar: Bar; now: number; effects: boolean 
       : single
         ? stageName || where.step?.title || ""
         : stageName;
-  const asks = (bar.state === "needs_input" || bar.state === "failed") && bar.note !== undefined;
+  const asks = (bar.state === "needs_input" || bar.state === "error") && bar.note !== undefined;
   const step = asks || bar.state === "done" || (single && stageName === "") ? undefined : where.step?.title;
   const label = asks ? bar.note! : name;
   const markList = useMemo(() => marks(bar, fill), [bar, fill]);
@@ -391,8 +396,8 @@ function StepRow({ step, color, now }: { step: Step; color: string; now: number 
   const dot =
     step.status === "done"
       ? color
-      : step.status === "failed"
-        ? STATE_COLOR.failed
+      : step.status === "error"
+        ? STATE_COLOR.error
         : step.status === "active"
           ? color
           : "rgba(168,166,158,.5)";
@@ -407,7 +412,7 @@ function StepRow({ step, color, now }: { step: Step; color: string; now: number 
           "min-w-0 flex-1 truncate",
           step.status === "active" && "font-medium text-foreground",
           step.status !== "active" && "text-muted-foreground",
-          step.status === "failed" && "text-destructive",
+          step.status === "error" && "text-destructive",
         )}
       >
         {step.title}
@@ -418,7 +423,7 @@ function StepRow({ step, color, now }: { step: Step; color: string; now: number 
 }
 
 function Steps({ bar, now }: { bar: Bar; now: number }) {
-  const color = STATE_COLOR[bar.state === "done" ? "done" : "working"];
+  const color = STATE_COLOR[bar.state === "done" ? "done" : "running"];
   return (
     <div className="mt-2 grid gap-x-6 gap-y-2 pl-4 text-xs sm:grid-cols-2">
       {bar.note === undefined ? null : (
@@ -463,9 +468,9 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
 }
 
 const AGENT_COLOR: Record<AgentState, string> = {
-  running: STATE_COLOR.working,
+  running: STATE_COLOR.running,
   done: STATE_COLOR.done,
-  error: STATE_COLOR.failed,
+  error: STATE_COLOR.error,
 };
 const AGENT_WORD: Record<AgentState, string> = { running: "#9C85D8", done: "#4FA569", error: "#D67278" };
 
@@ -633,13 +638,14 @@ function BarRow({
 function chime(state: BarState): void {
   const notes: Partial<Record<BarState, number[]>> = {
     needs_input: [660, 880],
-    failed: [440, 330],
+    error: [440, 330],
     done: [523, 659, 784],
   };
   const tones = notes[state];
   if (tones === undefined) return;
   try {
     const audio = new AudioContext();
+    void audio.resume();
     tones.forEach((frequency, index) => {
       const osc = audio.createOscillator();
       const gain = audio.createGain();
@@ -671,7 +677,8 @@ function Banner() {
       allAgents.length > 0 ||
       (options.autoClose && bars.length > 0),
   );
-  const agents = visibleAgents(allAgents, now, 30_000);
+  // as in the original: a finished strip stays 5 s, one with an error a while longer
+  const agents = visibleAgents(allAgents, now, 5_000);
 
   const close = useCallback(
     (id: string) => {

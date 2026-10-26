@@ -5,7 +5,18 @@
 // the bar above the thread's composer (app.tsx) refetches.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { applyOp, BARS_CHANGED, describe, type Bar, type Op } from "./engine";
+import {
+  allSteps,
+  answered,
+  applyOp,
+  BARS_CHANGED,
+  describe,
+  STATE_NAMES,
+  stateOf,
+  STEP_NAMES,
+  type Bar,
+  type Op,
+} from "./engine";
 import { AGENTS_CHANGED, agentsFromRows, type Agent } from "./agents";
 
 export type { Bar } from "./engine";
@@ -28,7 +39,7 @@ export const rpcContract = defineRpcContract({
 
 const stepSchema = z.object({
   title: z.string().min(1),
-  status: z.enum(["pending", "active", "done", "failed"]).optional(),
+  status: z.enum(STEP_NAMES).optional(),
 });
 
 const opSchema = z.object({
@@ -51,14 +62,14 @@ const opSchema = z.object({
     .describe("Step title to make current; earlier steps count as done."),
   failed: z.string().optional().describe("Step title that failed; add a note."),
   note: z.string().optional(),
-  state: z.enum(["working", "needs_input", "failed", "done"]).optional(),
+  state: z.enum(STATE_NAMES).optional().describe('"needs_input" before asking the user; "done" when finished.'),
 });
 
 const INSTRUCTIONS = `Show progress on multi-step work with the plan_progress tool; the user sees it as a bar above the message box.
 - A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]}. 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
-- Before asking the user a question: {id, state:"needs_input", note}. On an error you cannot fix: {id, failed:"<step>", note}.
-- When the task is finished: {id, state:"done"}.
+- Before asking the user a question: {id, state:"needs_input", note}; the user's answer clears it. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
+- When the task is finished: {id, state:"done"}. Any call without a state works the state out again.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.
 - The result already says done/total, state and the active step; do not call it just to check.
 Skip it for one-step answers and conversation.`;
@@ -97,7 +108,13 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   async function readBars(threadId: string): Promise<Bar[]> {
-    return (await bb.storage.kv.get<Bar[]>(barsKey(threadId))) ?? [];
+    const bars = (await bb.storage.kv.get<Bar[]>(barsKey(threadId))) ?? [];
+    // bars stored by 0.1 used "working" and "failed"
+    for (const bar of bars) {
+      bar.state = stateOf(bar.state) ?? "running";
+      for (const step of allSteps(bar)) if ((step.status as string) === "failed") step.status = "error";
+    }
+    return bars;
   }
   async function writeBars(threadId: string, bars: Bar[]): Promise<void> {
     if (bars.length === 0) await bb.storage.kv.delete(barsKey(threadId));
@@ -166,7 +183,15 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.idle", ({ thread }) => void refreshAgents(thread.id));
   bb.events.on("thread.deleted", ({ thread }) => {
     agentsByThread.delete(thread.id);
+    void serial(thread.id, () => writeBars(thread.id, []));
   });
+  // the person answered: a bar waiting on them goes back to work, without a model call
+  bb.events.on("thread.active", ({ thread }) =>
+    serial(thread.id, async () => {
+      const bars = answered(await readBars(thread.id), Date.now());
+      if (bars !== null) await writeBars(thread.id, bars);
+    }),
+  );
 
   bb.agents.registerTool({
     name: "plan_progress",

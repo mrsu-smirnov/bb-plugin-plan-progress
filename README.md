@@ -4,11 +4,17 @@ Live progress bars above a thread's message box in [BB](https://getbb.app).
 The agent splits a task into stages and steps with the `plan_progress` tool,
 and the bar fills as it works: working, needs your answer, error, done.
 
+![A bar on the Review stage with three background subagents under it: model, current tool, time](media/agents.png)
+
+| The step list, with the time of each step | Waiting on the user: the agent's question on the bar |
+| --- | --- |
+| ![The expanded step list](media/steps.png) | ![The bar waiting on the user](media/question.png) |
+
 A port of the idea and protocol of
 [plan-progress](https://github.com/zycck/claude-mods) by zycck, a mod for
 Claude Code (MIT). The original draws inside Claude Code's own window, which
-BB does not show; this plugin draws the bar in BB instead and works with any
-BB agent.
+BB does not show; this plugin draws the bar in BB instead, and registers the
+tool for BB agents rather than for Claude Code alone.
 
 ## Install
 

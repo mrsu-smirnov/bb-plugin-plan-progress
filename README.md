@@ -46,8 +46,8 @@ bb plugin install .
 bb plugin dev     # rebuild and reload on save
 ```
 
-The bar sits in BB's thread context row (`experimental_threadContextSegment`),
-an experimental Plugin SDK slot that can change between BB releases.
+The bars are a composer banner (`app.composer.customize`). Settings: effects,
+auto-close with its seconds, and sounds, in bb's plugin settings.
 
 ## License
 

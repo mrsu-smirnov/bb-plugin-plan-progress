@@ -33,9 +33,11 @@ The result says `done/total, state, active step`; no need to check the bar.
 
 ## Where the user sees it
 
-A segment in the row above the thread's message box: the current bar, its
-fill and count. Clicking it lists every bar of the thread with stages, steps,
-times, and a close button. A thread keeps at most 12 bars; finished ones leave
+A card above the thread's message box, one row per bar: state, title, the
+track with a pill naming the stage and step (the elapsed time on hover),
+percent, a fold button for the step list, and close. On a question or an
+error the pill shows the `note`. Settings (effects, auto-close, sounds) are in
+bb's plugin settings. A thread keeps at most 12 bars; finished ones leave
 first.
 
 ## Command

@@ -99,6 +99,12 @@ export default async function plugin(bb: BbPluginApi) {
       experimental_optionLabels: { "10": "10 s", "30": "30 s", "60": "60 s" },
       default: "30",
     },
+    speed: {
+      type: "boolean",
+      label: "Answer speed",
+      description: "≈ tok/s in the message box while the agent works: estimated from the text it writes, exact after the turn when bb reports the tokens.",
+      default: true,
+    },
     sounds: {
       type: "boolean",
       label: "Sounds",

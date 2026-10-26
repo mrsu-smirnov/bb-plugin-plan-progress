@@ -42,6 +42,21 @@ bb plan-progress clear
 
 The protocol is in [skills/plan-progress/SKILL.md](skills/plan-progress/SKILL.md).
 
+### Answer speed
+
+While the agent works, `⚡ ≈ 42 tok/s` stands in the message box before the
+voice and send buttons, and leaves a few seconds after the turn. It is the
+average over the latest minute of writing; the time a tool runs does not
+count, and subagents do not count.
+
+It is an estimate, as the original's live figure is: BB tells a plugin the
+exact output tokens only at the end of the agent's run, and Claude Code hands
+its text over a block at a time. So the plugin counts the characters the
+agent writes (text, thinking, tool calls) at a tokens-per-character ratio
+learned from the exact counts, which this browser keeps. When BB reports the
+exact count, the figure loses its `≈`. The box hides it in its compact,
+one-line layout.
+
 ## Develop
 
 ```bash
@@ -52,7 +67,8 @@ bb plugin install .
 bb plugin dev     # rebuild and reload on save
 ```
 
-The bars are a composer banner (`app.composer.customize`).
+The bars are a composer banner and the speed a composer action
+(`app.composer.customize`).
 
 ## Settings
 
@@ -64,6 +80,7 @@ Configuration. Or from a terminal: `bb plugin config plan-progress set <key> <va
 | Effects: twinkling dots in the bar | `effects` | on |
 | Auto-close: a finished bar leaves on its own | `autoClose` | off |
 | Stays for: 10, 30 or 60 s before it leaves | `autoCloseSeconds` | 30 |
+| Answer speed: ≈ tok/s in the message box while the agent works | `speed` | on |
 | Sounds: a chime on a question, an error and the finish | `sounds` | off |
 
 ## License

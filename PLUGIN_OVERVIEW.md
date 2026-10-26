@@ -5,16 +5,17 @@
 - A row for each subagent under the bar: its description, model, the tool it is in right now, and its time. Background subagents count too. Finished rows fold away after a few seconds.
 - The arrow beside the percent opens the step list with the time of every step. The cross closes a bar.
 - The plan can change mid-task: finished steps keep their done by title.
+- The answer speed in the message box while the agent works, `⚡ ≈ 42 tok/s`: an estimate from the text it writes over the latest minute, exact after the turn when bb reports the tokens.
 
 ## How it works
 
-The plugin adds a `plan_progress` tool. The agent sends the whole plan once, then short calls such as `{id, next: true}` after each step, `{id, state: "needs_input", note}` before asking you something, and `{id, state: "done"}` at the end. The rules for when to use it come with the tool. The subagent rows are read from the thread's own timeline and cost no tokens.
+The plugin adds a `plan_progress` tool. The agent sends the whole plan once, then short calls such as `{id, next: true}` after each step, `{id, state: "needs_input", note}` before asking you something, and `{id, state: "done"}` at the end. The rules for when to use it come with the tool. The subagent rows and the answer speed are read from the thread's own timeline and events and cost no tokens.
 
 Bars are stored per thread in the plugin's storage on your bb server. Nothing leaves the machine, and the plugin needs no account or API key.
 
 ## Settings
 
-Settings → Plugins → Plan Progress → the gear at the top right: twinkling dots on or off, auto-close for finished bars after 10, 30 or 60 seconds, and a short chime on a question, an error and the finish.
+Settings → Plugins → Plan Progress → the gear at the top right: twinkling dots on or off, auto-close for finished bars after 10, 30 or 60 seconds, the answer speed on or off, and a short chime on a question, an error and the finish.
 
 ## Credits
 

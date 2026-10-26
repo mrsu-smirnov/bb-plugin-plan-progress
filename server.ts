@@ -60,6 +60,36 @@ Skip it for one-step answers and conversation.`;
 const barsKey = (threadId: string) => `bars:${threadId}`;
 
 export default async function plugin(bb: BbPluginApi) {
+  // Read by app.tsx through useSettings(); the server itself uses none of them.
+  bb.settings.define({
+    effects: {
+      type: "boolean",
+      label: "Effects",
+      description: "Twinkling dots in the bar.",
+      default: true,
+    },
+    autoClose: {
+      type: "boolean",
+      label: "Auto-close",
+      description: "A finished bar leaves on its own.",
+      default: false,
+    },
+    autoCloseSeconds: {
+      type: "select",
+      label: "Stays for",
+      description: "How long a finished bar stays when auto-close is on.",
+      options: ["10", "30", "60"],
+      experimental_optionLabels: { "10": "10 s", "30": "30 s", "60": "60 s" },
+      default: "30",
+    },
+    sounds: {
+      type: "boolean",
+      label: "Sounds",
+      description: "A chime on a question, an error and the finish, in an open bb window.",
+      default: false,
+    },
+  });
+
   async function readBars(threadId: string): Promise<Bar[]> {
     return (await bb.storage.kv.get<Bar[]>(barsKey(threadId))) ?? [];
   }

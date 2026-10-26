@@ -6,13 +6,19 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { applyOp, BARS_CHANGED, describe, type Bar, type Op } from "./engine";
+import { AGENTS_CHANGED, agentsFromRows, type Agent } from "./agents";
 
 export type { Bar } from "./engine";
+export type { Agent } from "./agents";
 
 export const rpcContract = defineRpcContract({
   bars_get: {
     input: z.object({ threadId: z.string().min(1) }),
     output: z.object({ bars: z.array(z.custom<Bar>()) }),
+  },
+  agents_get: {
+    input: z.object({ threadId: z.string().min(1) }),
+    output: z.object({ agents: z.array(z.custom<Agent>()) }),
   },
   bars_dismiss: {
     input: z.object({ threadId: z.string().min(1), id: z.string().min(1) }),
@@ -120,6 +126,48 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
+  // Subagent strips. bb says a thread's events moved (at most once a second);
+  // for a thread with bars, read its latest timeline segment and pass the
+  // delegations on when they changed. Nothing is stored.
+  const agentsByThread = new Map<string, Agent[]>();
+  const refreshing = new Map<string, boolean>();
+  async function readAgents(threadId: string): Promise<Agent[]> {
+    const timeline = await bb.sdk.threads.timeline({
+      threadId,
+      includeNestedRows: "true",
+      segmentLimit: "1",
+    });
+    return agentsFromRows(timeline.rows);
+  }
+  async function refreshAgents(threadId: string): Promise<void> {
+    if (refreshing.has(threadId)) {
+      refreshing.set(threadId, true); // run once more when this pass ends
+      return;
+    }
+    refreshing.set(threadId, false);
+    try {
+      do {
+        refreshing.set(threadId, false);
+        const known = agentsByThread.get(threadId);
+        if (known === undefined && (await readBars(threadId)).length === 0) return;
+        const agents = await readAgents(threadId);
+        if (JSON.stringify(agents) === JSON.stringify(known ?? [])) continue;
+        if (agents.length === 0) agentsByThread.delete(threadId);
+        else agentsByThread.set(threadId, agents);
+        bb.realtime.publish(AGENTS_CHANGED, { threadId, agents });
+      } while (refreshing.get(threadId) === true);
+    } catch (error) {
+      bb.log.warn(`agents refresh failed for ${threadId}: ${String(error)}`);
+    } finally {
+      refreshing.delete(threadId);
+    }
+  }
+  bb.events.on("experimental_thread.events", ({ thread }) => void refreshAgents(thread.id));
+  bb.events.on("thread.idle", ({ thread }) => void refreshAgents(thread.id));
+  bb.events.on("thread.deleted", ({ thread }) => {
+    agentsByThread.delete(thread.id);
+  });
+
   bb.agents.registerTool({
     name: "plan_progress",
     description:
@@ -142,6 +190,9 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     bars_get: async ({ threadId }) => ({ bars: await readBars(threadId) }),
+    agents_get: async ({ threadId }) => ({
+      agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
+    }),
     bars_dismiss: ({ threadId, id }) =>
       serial(threadId, async () => {
         const bars = await readBars(threadId);
@@ -156,6 +207,7 @@ export default async function plugin(bb: BbPluginApi) {
     "Usage (inside a thread, or with --thread <id>):",
     "  bb plan-progress show [--json]      List this thread's bars",
     "  bb plan-progress op '<json>'        Apply one plan_progress op",
+    "  bb plan-progress agents [--json]    List the subagents of the latest turn",
     "  bb plan-progress clear              Remove every bar of the thread",
   ].join("\n");
 
@@ -172,6 +224,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "op",
         summary: "Apply one plan_progress op",
         usage: "bb plan-progress op '<json>' [--thread <id>]",
+      },
+      {
+        name: "agents",
+        summary: "List the subagents of the latest turn",
+        usage: "bb plan-progress agents [--json] [--thread <id>]",
       },
       {
         name: "clear",
@@ -215,6 +272,23 @@ export default async function plugin(bb: BbPluginApi) {
           return result.ok
             ? { exitCode: 0, stdout: result.text }
             : { exitCode: 1, stderr: result.text };
+        }
+        case "agents": {
+          const agents = await readAgents(threadId);
+          if (json) return { exitCode: 0, stdout: JSON.stringify(agents) };
+          return {
+            exitCode: 0,
+            stdout:
+              agents.length === 0
+                ? "No agents in the latest turn."
+                : agents
+                    .map((agent) =>
+                      [agent.state, agent.name, agent.kind, agent.model, agent.tool]
+                        .filter((part) => part !== null)
+                        .join(" · "),
+                    )
+                    .join("\n"),
+          };
         }
         case "clear":
           await serial(threadId, () => writeBars(threadId, []));

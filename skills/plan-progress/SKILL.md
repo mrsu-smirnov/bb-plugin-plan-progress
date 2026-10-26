@@ -18,6 +18,10 @@ Ops:
 - `{id, failed:"B", note}` — error
 - `{id, state:"needs_input", note}` — before asking the user
 - `{id, state:"done"}` — finish
+- `{id, state:"working"}` — back to work without moving a step
+
+`kind` (`"plan"` or `"todo"`) is optional: stages make a plan, a flat
+`steps` list a todo.
 
 Moving forward (`next`, `done`, `active`) after a question or an error puts
 the bar back to working.
@@ -48,4 +52,11 @@ Inside a thread (or with `--thread <id>`):
 | --- | --- |
 | `bb plan-progress show [--json]` | List the thread's bars |
 | `bb plan-progress op '<json>'` | Apply one op, same as the tool |
+| `bb plan-progress agents [--json]` | List the subagents of the latest turn |
 | `bb plan-progress clear` | Remove every bar of the thread |
+
+## Subagent strips
+
+Under the bar being worked on, one strip per subagent the main agent started:
+its description, model, the tool it is in, and its time. They come from bb's
+timeline, cost no tokens, and fold away 30 s after the agent ends.

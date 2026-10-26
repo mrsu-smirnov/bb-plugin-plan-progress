@@ -24,6 +24,7 @@
     "server.ts",
     "app.tsx",
     "engine.ts",
+    "agents.ts",
     "lib"
   ]
 }

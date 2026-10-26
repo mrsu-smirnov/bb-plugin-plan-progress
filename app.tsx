@@ -26,6 +26,7 @@ import {
   type Stage,
   type Step,
 } from "./engine";
+import { AGENTS_CHANGED, visibleAgents, type Agent, type AgentState } from "./agents";
 import { cn } from "@/lib/utils";
 
 // ---------- data ----------
@@ -49,6 +50,29 @@ function useBars(threadId: string | null): Bar[] {
     if ((payload as { threadId?: unknown } | null)?.threadId === threadId) refetch();
   });
   return bars;
+}
+
+/** The subagents of the thread's latest turn, pushed by the server as they change. */
+function useAgents(threadId: string | null): Agent[] {
+  const rpc = useRpc<typeof rpcContract>();
+  const [agents, setAgents] = useState<Agent[]>([]);
+  useEffect(() => {
+    setAgents([]);
+    if (threadId === null) return;
+    let live = true;
+    rpc.call("agents_get", { threadId }).then(
+      (result) => live && setAgents(result.agents),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [rpc, threadId]);
+  useRealtime(AGENTS_CHANGED, (payload) => {
+    const update = payload as { threadId?: unknown; agents?: unknown } | null;
+    if (update?.threadId === threadId && Array.isArray(update.agents)) setAgents(update.agents as Agent[]);
+  });
+  return agents;
 }
 
 interface Options {
@@ -438,6 +462,94 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
   );
 }
 
+const AGENT_COLOR: Record<AgentState, string> = {
+  running: STATE_COLOR.working,
+  done: STATE_COLOR.done,
+  error: STATE_COLOR.failed,
+};
+const AGENT_WORD: Record<AgentState, string> = { running: "#9C85D8", done: "#4FA569", error: "#D67278" };
+
+function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effects: boolean }) {
+  const color = AGENT_COLOR[agent.state];
+  const running = agent.state === "running";
+  const light = mix(hex(color), WHITE, 0.32);
+  const word = running ? agent.tool : agent.state === "done" ? "Done" : "Error";
+  const model = agent.model ?? agent.kind;
+  return (
+    <div
+      className="relative flex h-[20px] min-w-0 items-center gap-2 overflow-hidden rounded-full px-2.5 text-[11.5px]"
+      style={{ backgroundColor: "rgba(128,128,128,.14)" }}
+      title={[agent.name, agent.kind, agent.model].filter(Boolean).join(" · ")}
+    >
+      {effects && running ? (
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={mask("linear-gradient(90deg, transparent 30%, rgba(0,0,0,.6) 60%, transparent 85%)")}
+        >
+          {FLICKER.slice(0, 2).map((tile, k) => (
+            <div
+              key={k}
+              className="pp-blink absolute inset-0"
+              style={{
+                backgroundColor: rgb(light),
+                ...mask(tile, { maskSize: "48px 21px", WebkitMaskSize: "48px 21px" } as CSSProperties),
+                ["--pp-blink-dur" as string]: `${[2.2, 2.8][k]}s`,
+                ["--pp-blink-delay" as string]: `-${[0.4, 1.1][k]}s`,
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
+      <span
+        className={cn("relative size-1.5 shrink-0 rounded-full", running && "animate-pulse")}
+        style={{ backgroundColor: color }}
+      />
+      <span className="relative min-w-0 flex-1 truncate">
+        <span className="font-medium text-foreground">{agent.name}</span>
+        {model === null ? null : <span className="text-muted-foreground"> ({model})</span>}
+      </span>
+      {word === null ? null : (
+        <span className="relative max-w-[25%] shrink-0 truncate" style={{ color: AGENT_WORD[agent.state] }}>
+          {word}
+        </span>
+      )}
+      <span className="relative shrink-0 font-medium tabular-nums text-muted-foreground">
+        {elapsed((agent.endedAt ?? now) - agent.startedAt)}
+      </span>
+    </div>
+  );
+}
+
+function AgentStrips({ agents, now, effects }: { agents: Agent[]; now: number; effects: boolean }) {
+  const [folded, setFolded] = useState(false);
+  return (
+    <div className="mt-1.5 flex items-start gap-3">
+      {/* under the glyph and the title: the robot and how many */}
+      <span className="size-3.5 shrink-0" />
+      <button
+        type="button"
+        onClick={() => setFolded(!folded)}
+        aria-expanded={!folded}
+        title={folded ? "Show agents" : "Fold agents"}
+        className="flex h-[20px] w-[24%] min-w-0 max-w-[16rem] shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect width="16" height="12" x="4" y="8" rx="2" />
+          <path d="M12 8V4H8M2 14h2M20 14h2M15 13v2M9 13v2" />
+        </svg>
+        <span className="tabular-nums">{agents.length}</span>
+      </button>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {folded
+          ? null
+          : agents.map((agent) => <AgentStrip key={agent.id} agent={agent} now={now} effects={effects} />)}
+      </div>
+      {/* under the percent and the two buttons */}
+      <span className="w-[5.25rem] shrink-0" />
+    </div>
+  );
+}
+
 function RowGlyph({ state }: { state: BarState }) {
   const icon = ICON_PATH[state];
   if (icon === undefined) {
@@ -461,11 +573,13 @@ function BarRow({
   bar,
   now,
   effects,
+  agents,
   onClose,
 }: {
   bar: Bar;
   now: number;
   effects: boolean;
+  agents: Agent[];
   onClose: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -493,6 +607,7 @@ function BarRow({
           <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
         </IconButton>
       </div>
+      {agents.length === 0 ? null : <AgentStrips agents={agents} now={now} effects={effects} />}
       {open ? <Steps bar={bar} now={now} /> : null}
     </div>
   );
@@ -533,8 +648,14 @@ function Banner() {
   const threadId = composer.scope.kind === "thread" ? composer.scope.threadId : null;
   const rpc = useRpc<typeof rpcContract>();
   const bars = useBars(threadId);
+  const allAgents = useAgents(threadId);
   const options = useOptions();
-  const now = useNow(bars.some((bar) => bar.state !== "done") || (options.autoClose && bars.length > 0));
+  const now = useNow(
+    bars.some((bar) => bar.state !== "done") ||
+      allAgents.length > 0 ||
+      (options.autoClose && bars.length > 0),
+  );
+  const agents = visibleAgents(allAgents, now, 30_000);
 
   const close = useCallback(
     (id: string) => {
@@ -568,11 +689,21 @@ function Banner() {
 
   if (threadId === null || bars.length === 0) return null;
   const ordered = [...bars].sort((a, b) => a.createdAt - b.createdAt);
+  // the agents go under the bar being worked on: the latest unfinished one, else the latest
+  const byUpdate = [...bars].sort((a, b) => b.updatedAt - a.updatedAt);
+  const host = (byUpdate.find((bar) => bar.state !== "done") ?? byUpdate[0])?.id;
   return (
     <div className="divide-y divide-border/60 rounded-2xl bg-muted/60 py-0.5">
       <style>{STYLE}</style>
       {ordered.map((bar) => (
-        <BarRow key={bar.id} bar={bar} now={now} effects={options.effects} onClose={() => close(bar.id)} />
+        <BarRow
+          key={bar.id}
+          bar={bar}
+          now={now}
+          effects={options.effects}
+          agents={bar.id === host ? agents : []}
+          onClose={() => close(bar.id)}
+        />
       ))}
     </div>
   );

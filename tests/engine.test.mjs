@@ -113,10 +113,12 @@ test("original state names and the port's old ones are both accepted", () => {
   assert.equal(run([plan, { id: "auth", state: "working" }]).bar.state, "running");
 });
 
-test("state done fills the bar", () => {
-  const { bar } = run([plan, { id: "auth", state: "done" }]);
+test("state done finishes the bar and leaves its steps as they were, as in the original", () => {
+  const { bar } = run([plan, next, { id: "auth", state: "done" }]);
   assert.equal(bar.state, "done");
-  assert.deepEqual(counts(bar), { done: 4, total: 4 });
+  assert.equal(bar.endedAt, 3000);
+  assert.deepEqual(statuses(bar), ["done", "active", "pending", "pending"]);
+  assert.deepEqual(counts(bar), { done: 1, total: 4 });
 });
 
 test("a replan keeps done steps by title", () => {
@@ -143,7 +145,7 @@ test("a finished plan grown by a step carries its done steps over", () => {
     title: "вход ПО паролю",
     stages: [...plan.stages, { name: "Финиш", steps: [{ title: "Коммит" }] }],
   };
-  const { bar } = run([plan, { id: "auth", state: "done" }, grown]);
+  const { bar } = run([plan, next, next, next, next, grown]);
   assert.deepEqual(statuses(bar), ["done", "done", "done", "done", "active"]);
   assert.equal(bar.state, "running");
 });

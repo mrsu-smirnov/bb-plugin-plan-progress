@@ -264,7 +264,11 @@ export default async function plugin(bb: BbPluginApi) {
     async run(argv, ctx) {
       const json = argv.includes("--json");
       const flag = argv.indexOf("--thread");
-      const threadId = flag === -1 ? ctx.threadId : argv[flag + 1];
+      const value = flag === -1 ? undefined : argv[flag + 1];
+      if (flag !== -1 && (value === undefined || value.startsWith("--"))) {
+        return { exitCode: 1, stderr: "--thread needs a thread id: --thread <id>." };
+      }
+      const threadId = flag === -1 ? ctx.threadId : value;
       const rest = argv.filter(
         (arg, index) => arg !== "--json" && (flag === -1 || (index !== flag && index !== flag + 1)),
       );

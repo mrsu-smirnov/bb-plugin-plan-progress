@@ -342,15 +342,6 @@ export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult 
   // an op without a state works it out again: a question or an error clears with the next call
   const state: BarState =
     stateOf(op.state) ?? (isAllDone ? "done" : typeof op.failed === "string" ? "error" : "running");
-  if (state === "done") {
-    for (const step of steps) {
-      if (step.status === "active" || step.status === "pending") {
-        step.status = "done";
-        step.startedAt ??= now;
-        step.endedAt = now;
-      }
-    }
-  }
   const note = clip(op.note, LIMITS.note);
   const bar: Bar = {
     id,

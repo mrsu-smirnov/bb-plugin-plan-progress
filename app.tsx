@@ -456,7 +456,7 @@ function Steps({ bar, now }: { bar: Bar; now: number }) {
           )}
           <ul>
             {stage.steps.map((step, stepIndex) => (
-              <StepRow key={stepIndex} step={step} color={color} now={now} />
+              <StepRow key={stepIndex} step={step} color={color} now={bar.endedAt ?? now} />
             ))}
           </ul>
         </div>
@@ -703,15 +703,23 @@ function Banner() {
     [rpc, threadId],
   );
 
-  // auto-close: a finished bar leaves after the chosen seconds
+  // auto-close: a finished bar leaves after the chosen seconds, asked once per finish
+  const dismissed = useRef(new Set<string>());
   useEffect(() => {
     if (!options.autoClose) return;
     for (const bar of bars) {
-      if (bar.state === "done" && bar.endedAt !== undefined && now - bar.endedAt >= options.autoCloseSeconds * 1000) {
+      const key = `${threadId}:${bar.id}:${bar.endedAt}`;
+      if (
+        bar.state === "done" &&
+        bar.endedAt !== undefined &&
+        now - bar.endedAt >= options.autoCloseSeconds * 1000 &&
+        !dismissed.current.has(key)
+      ) {
+        dismissed.current.add(key);
         close(bar.id);
       }
     }
-  }, [bars, now, options.autoClose, options.autoCloseSeconds, close]);
+  }, [bars, now, threadId, options.autoClose, options.autoCloseSeconds, close]);
 
   // sounds: on a change of state seen live, not on load
   const seen = useRef<Map<string, BarState> | null>(null);

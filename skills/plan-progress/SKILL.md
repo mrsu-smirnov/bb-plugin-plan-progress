@@ -40,8 +40,10 @@ The result says `done/total, state, active step`; no need to check the bar.
 A card above the thread's message box, one row per bar: state, title, the
 track with a pill naming the stage and step (the elapsed time on hover),
 percent, a fold button for the step list, and close. On a question or an
-error the pill shows the `note`. Settings (effects, auto-close, sounds) are in
-bb's plugin settings. A thread keeps at most 12 bars; finished ones leave
+error the pill shows the `note`. Settings (effects, auto-close and its seconds,
+sounds): bb Settings → Plugins → Plan Progress → the gear at the top right, or
+`bb plugin config plan-progress set <key> <value>` with keys `effects`,
+`autoClose`, `autoCloseSeconds` (10, 30, 60), `sounds`. A thread keeps at most 12 bars; finished ones leave
 first.
 
 ## Command

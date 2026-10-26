@@ -46,8 +46,19 @@ bb plugin install .
 bb plugin dev     # rebuild and reload on save
 ```
 
-The bars are a composer banner (`app.composer.customize`). Settings: effects,
-auto-close with its seconds, and sounds, in bb's plugin settings.
+The bars are a composer banner (`app.composer.customize`).
+
+## Settings
+
+In bb: Settings → Plugins → Plan Progress → the gear at the top right →
+Configuration. Or from a terminal: `bb plugin config plan-progress set <key> <value>`.
+
+| Setting | Key | Default |
+| --- | --- | --- |
+| Effects: twinkling dots in the bar | `effects` | on |
+| Auto-close: a finished bar leaves on its own | `autoClose` | off |
+| Stays for: 10, 30 or 60 s before it leaves | `autoCloseSeconds` | 30 |
+| Sounds: a chime on a question, an error and the finish | `sounds` | off |
 
 ## License
 

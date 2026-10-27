@@ -30,10 +30,29 @@ import {
 import { AGENTS_CHANGED, visibleAgents, type Agent, type AgentState } from "./agents";
 import { SPEED_EVENT_TYPES, SpeedMeter, speedLabel, type Speed, type SpeedEvent } from "./speed";
 import { cn } from "@/lib/utils";
+import { DIAGNOSTICS_CHANGED, type ProgressDiagnostic } from "./diagnostics";
 
 // ---------- data ----------
 
 const NO_BARS: Bar[] = [];
+
+function useProgressWarning(threadId: string | null): string | null {
+  const rpc = useRpc<typeof rpcContract>();
+  const [loaded, setLoaded] = useState<{ threadId: string; diagnostic: ProgressDiagnostic } | null>(null);
+  const latest = useRef(0);
+  const refetch = useCallback(() => {
+    const ticket = ++latest.current;
+    if (!threadId) return;
+    void rpc.call("diagnostics_get", { threadId }).then(result => {
+      if (ticket === latest.current) setLoaded({ threadId, diagnostic: result.diagnostic });
+    }, () => undefined);
+  }, [rpc, threadId]);
+  useEffect(() => { refetch(); }, [refetch]);
+  useRealtime(DIAGNOSTICS_CHANGED, payload => {
+    if ((payload as { threadId?: unknown } | null)?.threadId === threadId) refetch();
+  });
+  return loaded?.threadId === threadId ? loaded?.diagnostic.warning ?? null : null;
+}
 
 /** The thread's bars, kept current by the server's realtime signal. */
 function useBars(threadId: string | null): Bar[] {
@@ -690,6 +709,7 @@ function Banner() {
   const threadId = composer.scope.kind === "thread" ? composer.scope.threadId : null;
   const rpc = useRpc<typeof rpcContract>();
   const bars = useBars(threadId);
+  const warning = useProgressWarning(threadId);
   const allAgents = useAgents(threadId);
   const options = useOptions();
   const now = useNow(
@@ -738,7 +758,7 @@ function Banner() {
     if (changed !== undefined) chime(changed.state);
   }, [bars, options.sounds]);
 
-  if (threadId === null || bars.length === 0) return null;
+  if (threadId === null || (bars.length === 0 && !warning)) return null;
   const ordered = [...bars].sort((a, b) => a.createdAt - b.createdAt);
   // the agents go under the bar being worked on: the latest unfinished one, else the latest
   const byUpdate = [...bars].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -746,6 +766,7 @@ function Banner() {
   return (
     <div className="divide-y divide-border/60 rounded-2xl bg-muted/60 py-0.5">
       <style>{STYLE}</style>
+      {warning && <div role="status" className="px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{warning}</div>}
       {ordered.map((bar) => (
         <BarRow
           key={bar.id}

@@ -18,11 +18,18 @@ import {
   type Op,
 } from "./engine";
 import { AGENTS_CHANGED, agentsFromRows, type Agent } from "./agents";
+import { hostContract } from "./host-contract";
+import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
+import { newReminderState, observeWork, type ReminderState } from "./reminders";
 
 export type { Bar } from "./engine";
 export type { Agent } from "./agents";
 
 export const rpcContract = defineRpcContract({
+  diagnostics_get: {
+    input: z.object({ threadId: z.string().min(1) }),
+    output: z.object({ diagnostic: z.custom<ProgressDiagnostic>() }),
+  },
   bars_get: {
     input: z.object({ threadId: z.string().min(1) }),
     output: z.object({ bars: z.array(z.custom<Bar>()) }),
@@ -65,11 +72,14 @@ const opSchema = z.object({
   state: z.enum(STATE_NAMES).optional().describe('"needs_input" before asking the user; "done" when finished.'),
 });
 
-const INSTRUCTIONS = `Show progress on multi-step work with the plan_progress tool; the user sees it as a bar above the message box.
+const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress tool; the user sees it as a bar above the message box.
+- REQUIRED: for 3 or more requested actions, create the BB bar BEFORE the first work tool call. Read-only work counts. Reading three files counts. A task finished in one turn still counts. "No subagents" does not forbid a progress bar: the bar is UI bookkeeping, not a subagent or a workspace edit. Do not reinterpret three explicit steps as a one-step answer.
+- In Claude Code, discover and use mcp__bb-bridge__plan_progress (ToolSearch: select:mcp__bb-bridge__plan_progress). Never use mcp__plan-progress__plan_progress: it belongs to the Claude Desktop plugin and cannot display a bar in BB. Other providers use their advertised BB plan_progress tool.
+- If the BB tool is missing or fails, use the same operation with bb plan-progress op '<json>' in the current thread. If that also fails, report the failure; do not silently use the Desktop plugin.
 - A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]}. 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
 - Before asking the user a question: {id, state:"needs_input", note}; the user's answer clears it. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
-- When the task is finished: {id, state:"done"}. Any call without a state works the state out again.
+- When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.
 - The result already says done/total, state and the active step; do not call it just to check.
 Skip it for one-step answers and conversation.`;
@@ -77,8 +87,22 @@ Skip it for one-step answers and conversation.`;
 const barsKey = (threadId: string) => `bars:${threadId}`;
 
 export default async function plugin(bb: BbPluginApi) {
-  // Read by app.tsx through useSettings(); the server itself uses none of them.
-  bb.settings.define({
+  const settings = bb.settings.define({
+    automaticReminders: {
+      type: "boolean", label: "Automatic progress reminders",
+      description: "At most one reminder per active turn after 3 work calls without a bar or 6 without an update. Never starts a new turn.",
+      default: true,
+    },
+    isolateClaude: {
+      type: "boolean", label: "Isolate Claude Desktop progress",
+      description: "Disable the original zycck progress plugin only in BB's Claude processes. Desktop settings stay unchanged. Applies to new sessions.",
+      default: true,
+    },
+    claudeExecutable: {
+      type: "string", label: "Claude executable",
+      description: "Optional absolute path on the agent's machine; otherwise use the native Claude executable on PATH.",
+      default: "",
+    },
     effects: {
       type: "boolean",
       label: "Effects",
@@ -113,6 +137,59 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  const host = bb.hosts.experimental_client({ contract: hostContract });
+  bb.providers.experimental_contributeEnv("claude-code", async ({ hostId, threadId }) => {
+    const config = await settings.get();
+    if (!threadId || !config.isolateClaude) return [];
+    const { launcher } = await host.call("prepareClaude", { executable: config.claudeExecutable }, { hostId });
+    return [{ name: "BB_CLAUDE_CODE_EXECUTABLE", value: launcher,
+      reason: "Isolate zycck progress in this BB process; preserve Claude Desktop settings" }];
+  });
+
+  const diagnostics = new Map<string, ProgressDiagnostic>();
+  const diagnosticCursors = new Map<string, number>();
+  const diagnosticPulls = new Map<string, Promise<void>>();
+  const reminderStates = new Map<string, ReminderState>();
+  async function refreshDiagnostic(threadId: string): Promise<void> {
+    const busy = diagnosticPulls.get(threadId);
+    if (busy) return busy;
+    const run = (async () => {
+      let cursor = diagnosticCursors.get(threadId);
+      let previous = diagnostics.get(threadId) ?? NO_DIAGNOSTIC;
+      for (let page = 0; page < 5; page++) {
+        const events = await bb.sdk.threads.events.list({ threadId, types: ["item/completed"], limit: "100",
+          ...(cursor === undefined ? { order: "desc" as const } : { afterSeq: String(cursor) }) });
+        const ordered = cursor === undefined ? [...events].reverse() : events;
+        const reminder = reminderStates.get(threadId);
+        if (reminder && observeWork(reminder, ordered) && (await settings.get()).automaticReminders) {
+          // Set before awaiting: never send twice, even on failure. Strict `steer`
+          // rejects an idle target instead of creating a follow-up turn.
+          reminder.sent = true;
+          const bars = await readBars(threadId);
+          const updatedThisTurn = bars.some(bar => bar.updatedAt >= reminder.since);
+          if (!updatedThisTurn || bars.some(bar => bar.state === "running")) {
+            await bb.sdk.threads.send({ threadId, mode: "steer", input: [{ type: "text", visibility: "agent-only", mentions: [],
+              text: "BB plan-progress automatic reminder: several work calls have run. Create or update BB's plan_progress bar now for the remaining work (Claude: mcp__bb-bridge__plan_progress). A bar is UI bookkeeping, not a subagent or file edit. If the task is already finished, do not invent a plan retroactively. Do not repeat completed work. If the tool is unavailable, report that once." }],
+            }).catch(() => undefined);
+          }
+        }
+        const next = advanceDiagnostic(previous, ordered);
+        if (next !== previous) {
+          diagnostics.set(threadId, next);
+          if (next.warning && previous.source !== next.source) bb.log.warn(`Progress tool collision in ${threadId}`);
+          previous = next;
+          bb.realtime.publish(DIAGNOSTICS_CHANGED, { threadId });
+        }
+        const initial = cursor === undefined;
+        cursor = Math.max(cursor ?? 0, ...events.map(event => event.seq));
+        diagnosticCursors.set(threadId, cursor);
+        if (initial || events.length < 100) break;
+      }
+    })().catch(error => bb.log.warn(`Progress diagnostics failed for ${threadId}: ${String(error)}`));
+    diagnosticPulls.set(threadId, run);
+    try { await run; } finally { diagnosticPulls.delete(threadId); }
+  }
+
   async function readBars(threadId: string): Promise<Bar[]> {
     const bars = (await bb.storage.kv.get<Bar[]>(barsKey(threadId))) ?? [];
     // bars stored by 0.1 used "working" and "failed"
@@ -145,7 +222,11 @@ export default async function plugin(bb: BbPluginApi) {
       const result = applyOp(await readBars(threadId), op, Date.now());
       if (!result.ok) return { ok: false, text: result.error };
       await writeBars(threadId, result.bars);
-      return { ok: true, text: describe(result.bar) };
+      diagnostics.set(threadId, { source: "bb", lastCallSeq: diagnostics.get(threadId)?.lastCallSeq ?? 0, warning: null });
+      const reminder = reminderStates.get(threadId);
+      if (reminder) { reminder.hasPlan = true; reminder.sinceUpdate = 0; }
+      bb.realtime.publish(DIAGNOSTICS_CHANGED, { threadId });
+      return { ok: true, text: `BB/${threadId}: ${describe(result.bar)}` };
     });
   }
 
@@ -186,23 +267,32 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
   bb.events.on("experimental_thread.events", ({ thread }) => void refreshAgents(thread.id));
+  bb.events.on("experimental_thread.events", ({ thread }) => void refreshDiagnostic(thread.id));
+  bb.events.on("thread.idle", ({ thread }) => void refreshDiagnostic(thread.id));
+  bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
+  bb.events.on("thread.failed", ({ thread }) => { reminderStates.delete(thread.id); });
   bb.events.on("thread.idle", ({ thread }) => void refreshAgents(thread.id));
   bb.events.on("thread.deleted", ({ thread }) => {
     agentsByThread.delete(thread.id);
+    diagnostics.delete(thread.id);
+    diagnosticCursors.delete(thread.id);
+    reminderStates.delete(thread.id);
     void serial(thread.id, () => writeBars(thread.id, []));
   });
   // the person answered: a bar waiting on them goes back to work, without a model call
-  bb.events.on("thread.active", ({ thread }) =>
-    serial(thread.id, async () => {
+  bb.events.on("thread.active", ({ thread }) => {
+    reminderStates.set(thread.id, newReminderState(Date.now()));
+    return serial(thread.id, async () => {
       const bars = answered(await readBars(thread.id), Date.now());
       if (bars !== null) await writeBars(thread.id, bars);
-    }),
-  );
+    });
+  });
 
   bb.agents.registerTool({
     name: "plan_progress",
     description:
-      "Create or move a live progress bar for the current task, shown above the user's message box. " +
+      "BB progress bar above the BB message box (Claude: mcp__bb-bridge__plan_progress). " +
+      "Separate from the Claude Desktop plan-progress tool. " +
       "Create once with the whole plan, then send short ops.",
     instructions: INSTRUCTIONS,
     presentation: {
@@ -220,6 +310,10 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.rpc.register(rpcContract, {
+    diagnostics_get: async ({ threadId }) => {
+      await refreshDiagnostic(threadId);
+      return { diagnostic: diagnostics.get(threadId) ?? NO_DIAGNOSTIC };
+    },
     bars_get: async ({ threadId }) => ({ bars: await readBars(threadId) }),
     agents_get: async ({ threadId }) => ({
       agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
@@ -239,6 +333,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb plan-progress show [--json]      List this thread's bars",
     "  bb plan-progress op '<json>'        Apply one plan_progress op",
     "  bb plan-progress agents [--json]    List the subagents of the latest turn",
+    "  bb plan-progress diagnose [--json]  Check progress routing and isolation",
     "  bb plan-progress clear              Remove every bar of the thread",
   ].join("\n");
 
@@ -246,6 +341,8 @@ export default async function plugin(bb: BbPluginApi) {
     name: "plan-progress",
     summary: "Show, move, or clear the progress bars of a thread",
     commands: [
+      { name: "diagnose", summary: "Check progress routing and isolation",
+        usage: "bb plan-progress diagnose [--json] [--thread <id>]" },
       {
         name: "show",
         summary: "List the thread's bars",
@@ -286,6 +383,15 @@ export default async function plugin(bb: BbPluginApi) {
         return { exitCode: 1, stderr: "No thread: run it inside a thread or pass --thread <id>." };
       }
       switch (command) {
+        case "diagnose": {
+          await refreshDiagnostic(threadId);
+          const config = await settings.get();
+          const diagnostic = diagnostics.get(threadId) ?? NO_DIAGNOSTIC;
+          const report = { threadId, isolateClaude: config.isolateClaude,
+            bars: (await readBars(threadId)).length, ...diagnostic };
+          return { exitCode: 0, stdout: json ? JSON.stringify(report) :
+            `BB/${threadId}: ${report.bars} bars; last source: ${report.source ?? "no recognized call"}; Claude isolation requested: ${report.isolateClaude}.\n${report.warning ?? "No detected tool collision."}` };
+        }
         case "show": {
           const bars = await readBars(threadId);
           if (json) return { exitCode: 0, stdout: JSON.stringify(bars) };

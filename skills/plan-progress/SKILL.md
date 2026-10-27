@@ -7,6 +7,15 @@ description: Reference for the plan_progress bars (tool ops, the bb plan-progres
 
 Create once with the whole plan, then move it with short ops.
 
+Use BB's tool. In Claude Code discover `mcp__bb-bridge__plan_progress`,
+never `mcp__plan-progress__plan_progress` (the latter draws in Claude Desktop).
+Other providers use their advertised BB tool. Read-only tasks with three
+actions count too, even in one turn and with subagents forbidden.
+If unavailable, try `bb plan-progress op '<json>'` in the current thread;
+report failure if neither route works. Do not silently switch to the Desktop mod.
+Before closing, mark completed step titles done: `state:"done"` alone
+does not change unfinished step statuses.
+
 Create: `{id, title, stages:[{name, steps:[{title}]}]}`; `steps:[{title}]`
 instead of `stages` for one flat list. 2-7 stages, titles of at most 4 words,
 in the user's language, one `id` per task. A step's `status` defaults to
@@ -59,6 +68,7 @@ Inside a thread (or with `--thread <id>`):
 | `bb plan-progress show [--json]` | List the thread's bars |
 | `bb plan-progress op '<json>'` | Apply one op, same as the tool |
 | `bb plan-progress agents [--json]` | List the subagents of the latest turn |
+| `bb plan-progress diagnose [--json]` | Check routing, bars, and requested Claude isolation |
 | `bb plan-progress clear` | Remove every bar of the thread |
 
 ## Subagent strips
@@ -66,3 +76,16 @@ Inside a thread (or with `--thread <id>`):
 Under the bar being worked on, one strip per subagent the main agent started:
 its description, model, the tool it is in, and its time. They come from bb's
 timeline, cost no tokens, and fold away 5 s after the agent ends (2 min after an error).
+
+## Coexistence with Claude Desktop
+
+The original mod stays installed and enabled for ordinary Claude/Desktop
+launches. BB's Claude threads get a process-only override via a generated
+launcher; user and project settings files are never rewritten. `isolateClaude`
+defaults to true. For a custom native executable, set `claudeExecutable` to its
+absolute path on the host. Start a new thread to receive changed instructions.
+Windows has not yet been validated on a real host.
+
+`automaticReminders` defaults to true: at most one strict steer per active
+turn after 3 work calls without a bar or 6 without an update. It never starts
+a follow-up turn. This improves compliance rather than guaranteeing it.

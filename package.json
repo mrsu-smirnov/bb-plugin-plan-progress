@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-plan-progress",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "engines": {
     "bb": ">=0.47",
@@ -13,6 +13,7 @@
       "icon": "ListTodo"
     },
     "server": "./server.ts",
+    "host": "./host.ts",
     "app": "./app.tsx",
     "skills": [
       "skills"
@@ -58,6 +59,7 @@
   "homepage": "https://github.com/mrsu-smirnov/bb-plugin-plan-progress#readme",
   "scripts": {
     "test": "node --experimental-strip-types --no-warnings --test tests/*.test.mjs",
+    "test:integration": "npm run build && node --test tests/integration/*.test.mjs",
     "typecheck": "tsc",
     "build": "bb plugin build"
   }

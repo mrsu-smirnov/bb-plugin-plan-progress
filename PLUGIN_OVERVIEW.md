@@ -11,6 +11,8 @@
 
 The plugin adds a `plan_progress` tool. The agent sends the whole plan once, then short calls such as `{id, next: true}` after each step, `{id, state: "needs_input", note}` before asking you something, and `{id, state: "done"}` at the end. The rules for when to use it come with the tool. The subagent rows and the answer speed are read from the thread's own timeline and events and cost no tokens.
 
+The original zycck mod can stay enabled in Claude Desktop. BB's Claude processes get a session-only override that isolates that mod; settings files stay unchanged. Tasks with three or more actions receive an explicit progress rule, including read-only work. A bounded automatic reminder can recover a missed or stale update without a reminder from the user. Model compliance is not an absolute guarantee. `bb plan-progress diagnose` checks routing; a detected call to the Desktop tool shows a warning above the BB composer.
+
 Bars are stored per thread in the plugin's storage on your bb server. Nothing leaves the machine, and the plugin needs no account or API key.
 
 ## Settings

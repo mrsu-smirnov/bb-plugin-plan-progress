@@ -4,6 +4,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "lib": [
       "ES2022",
@@ -22,6 +23,9 @@
   },
   "include": [
     "server.ts",
+    "host.ts",
+    "isolation.ts",
+    "diagnostics.ts",
     "app.tsx",
     "engine.ts",
     "agents.ts",

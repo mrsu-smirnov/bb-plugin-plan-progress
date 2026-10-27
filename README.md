@@ -42,6 +42,38 @@ bb plan-progress clear
 
 The protocol is in [skills/plan-progress/SKILL.md](skills/plan-progress/SKILL.md).
 
+### Claude Desktop and BB together
+
+The original zycck mod may stay enabled in Claude Desktop. By default this
+plugin gives only BB's Claude thread processes a session-only settings override
+that disables `plan-progress@zycck-mods`. It does not change Claude settings
+files, uninstall the mod, or patch BB's built-in provider. The launcher is
+prepared automatically on the selected enrolled machine. Start a new thread
+after an update; existing sessions may retain old instructions and tools.
+
+For Claude the correct tool is `mcp__bb-bridge__plan_progress`, not
+`mcp__plan-progress__plan_progress`. Codex and Pi use BB's tool under their
+provider's advertised name. Successful calls return `BB/<threadId>`.
+
+`bb plan-progress diagnose --json` reports the last recognized tool route and
+whether isolation is requested. A detected original-tool call shows a warning
+above the composer, even when BB has no bars. Isolation being requested is not
+proof that an existing provider session was restarted with it.
+
+The agent receives an explicit rule for tasks with three or more actions,
+including read-only work. The plugin can send at most one automatic reminder
+per active turn after three work calls without a bar or six without an update.
+It uses strict steering and does not start another turn. Model compliance still
+cannot be guaranteed; this is not a universal gate before every work tool.
+The original tool is isolated only for the known `plan-progress@zycck-mods` id.
+An installation under another marketplace id requires separate configuration.
+
+Validated on Linux with Claude Code, Codex, and Pi. The Windows launcher follows
+the Claude SDK's JavaScript executable contract, but has not been tested on a
+Windows host. Claude Desktop's GUI was not driven in these checks: the native
+plugin list confirms enabled in an ordinary launch, disabled in the BB launch,
+with the settings file unchanged.
+
 ### Answer speed
 
 `⚡ ≈ 42 tok/s` stands in the message box before the voice and send buttons,
@@ -63,6 +95,7 @@ one-line layout.
 ```bash
 npm install
 npm test          # the bar engine
+npm run test:integration # build and exercise the backend and host launcher
 npm run typecheck
 bb plugin install .
 bb plugin dev     # rebuild and reload on save
@@ -79,6 +112,9 @@ Configuration. Or from a terminal: `bb plugin config plan-progress set <key> <va
 | Setting | Key | Default |
 | --- | --- | --- |
 | Effects: twinkling dots in the bar | `effects` | on |
+| Session-only isolation of the original Claude mod | `isolateClaude` | on |
+| Optional absolute native Claude executable path on the host | `claudeExecutable` | empty: find on PATH |
+| One automatic progress reminder per active turn | `automaticReminders` | on |
 | Auto-close: a finished bar leaves on its own | `autoClose` | off |
 | Stays for: 10, 30 or 60 s before it leaves | `autoCloseSeconds` | 30 |
 | Answer speed: ≈ tok/s in the message box | `speed` | on |

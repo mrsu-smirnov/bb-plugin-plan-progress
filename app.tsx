@@ -522,7 +522,7 @@ function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effect
   return (
     <div
       className="relative flex h-[20px] min-w-0 items-center gap-2 overflow-hidden rounded-full px-2.5 text-[11.5px]"
-      style={{ backgroundColor: "rgba(128,128,128,.14)" }}
+      style={{ backgroundColor: `${color}26` }} // the state colour at 15%, as in the original
       title={[agent.name, agent.kind, agent.model].filter(Boolean).join(" · ")}
     >
       {effects && running ? (

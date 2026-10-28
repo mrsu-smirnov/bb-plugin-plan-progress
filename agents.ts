@@ -18,6 +18,8 @@ export interface Agent {
   tool: string | null;
   startedAt: number;
   endedAt: number | null;
+  /** Set for a child thread (it has a thread of its own to open); absent for an agent of the turn. */
+  threadId?: string;
 }
 
 interface Row {
@@ -216,5 +218,6 @@ export function agentFromChild(thread: ChildThread, execution: { model?: unknown
     tool: null,
     startedAt: thread.createdAt,
     endedAt: state === "running" ? null : thread.updatedAt,
+    threadId: thread.id,
   };
 }

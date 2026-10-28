@@ -208,7 +208,7 @@ export function agentFromChild(thread: ChildThread, execution: { model?: unknown
   const model = text(execution?.model)?.split("/").pop() ?? null;
   const parts = [provider, model, text(execution?.reasoningLevel)];
   const state: AgentState =
-    thread.status === "failed" ? "error" : thread.status === "idle" ? "done" : "running";
+    thread.status === "error" ? "error" : thread.status === "idle" ? "done" : "running";
   return {
     id: thread.id,
     name: text(thread.title) ?? text(thread.titleFallback) ?? "Thread",

@@ -246,17 +246,23 @@ export default async function plugin(bb: BbPluginApi) {
   }
   // Threads this one started on other providers (`bb thread spawn --parent-self`).
   // The model is in the child's first request; it never changes, so keep it.
-  const childModels = new Map<string, { model?: unknown; reasoningLevel?: unknown } | null>();
+  const childModels = new Map<string, { model?: unknown; reasoningLevel?: unknown }>();
   async function readChildren(threadId: string): Promise<Agent[]> {
     const children = (await bb.sdk.threads.list({ parentThreadId: threadId })) as unknown as ChildThread[];
     return Promise.all(
       children.map(async (child) => {
+        // A model not found yet (the first request is not written) is not kept: ask again next time.
+        // One child that cannot be read never takes the other strips down with it.
         if (!childModels.has(child.id)) {
-          const [first] = await bb.sdk.threads.events.list({
-            threadId: child.id, types: ["client/turn/requested"], limit: "1", order: "asc" as const,
-          });
-          const data = first as unknown as { data?: { execution?: { model?: unknown; reasoningLevel?: unknown } } } | undefined;
-          childModels.set(child.id, data?.data?.execution ?? null);
+          try {
+            const [first] = await bb.sdk.threads.events.list({
+              threadId: child.id, types: ["client/turn/requested"], limit: "1", order: "asc" as const,
+            });
+            const data = first as unknown as { data?: { execution?: { model?: unknown; reasoningLevel?: unknown } } } | undefined;
+            if (data?.data?.execution) childModels.set(child.id, data.data.execution);
+          } catch (error) {
+            bb.log.warn(`child model read failed for ${child.id}: ${String(error)}`);
+          }
         }
         return agentFromChild(child, childModels.get(child.id) ?? null);
       }),
@@ -292,12 +298,17 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("experimental_thread.events", ({ thread }) => void refreshDiagnostic(thread.id));
   bb.events.on("thread.idle", ({ thread }) => void refreshDiagnostic(thread.id));
   bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
-  bb.events.on("thread.failed", ({ thread }) => { reminderStates.delete(thread.id); });
+  bb.events.on("thread.failed", ({ thread }) => {
+    reminderStates.delete(thread.id);
+    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId); // the strip turns red
+  });
   bb.events.on("thread.idle", ({ thread }) => {
     void refreshAgents(thread.id);
     if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
   });
   bb.events.on("thread.deleted", ({ thread }) => {
+    childModels.delete(thread.id);
+    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId); // its strip goes
     agentsByThread.delete(thread.id);
     diagnostics.delete(thread.id);
     diagnosticCursors.delete(thread.id);

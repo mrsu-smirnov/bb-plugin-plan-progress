@@ -185,3 +185,34 @@ export function visibleAgents(agents: readonly Agent[], now: number, keepMs: num
     return now - (agent.endedAt ?? agent.startedAt) < keep;
   });
 }
+
+const PROVIDERS: Record<string, string> = { "claude-code": "Claude", codex: "Codex", pi: "Pi" };
+
+/** What bb says of a child thread (`bb thread spawn --parent-self`), and the model it was started with. */
+export interface ChildThread {
+  id: string;
+  title: string | null;
+  titleFallback?: string | null;
+  providerId: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A child thread as a strip: "Codex · gpt-6.1-terra · medium" in place of a bare model, state from the thread's status. */
+export function agentFromChild(thread: ChildThread, execution: { model?: unknown; reasoningLevel?: unknown } | null): Agent {
+  const provider = PROVIDERS[thread.providerId] ?? thread.providerId;
+  const parts = [provider, text(execution?.model), text(execution?.reasoningLevel)];
+  const state: AgentState =
+    thread.status === "failed" ? "error" : thread.status === "idle" ? "done" : "running";
+  return {
+    id: thread.id,
+    name: text(thread.title) ?? text(thread.titleFallback) ?? "Thread",
+    kind: provider,
+    model: parts.filter((part): part is string => part !== null).join(" · "),
+    state,
+    tool: null,
+    startedAt: thread.createdAt,
+    endedAt: state === "running" ? null : thread.updatedAt,
+  };
+}

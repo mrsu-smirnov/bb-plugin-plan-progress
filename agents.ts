@@ -202,7 +202,9 @@ export interface ChildThread {
 /** A child thread as a strip: "Codex · gpt-6.1-terra · medium" in place of a bare model, state from the thread's status. */
 export function agentFromChild(thread: ChildThread, execution: { model?: unknown; reasoningLevel?: unknown } | null): Agent {
   const provider = PROVIDERS[thread.providerId] ?? thread.providerId;
-  const parts = [provider, text(execution?.model), text(execution?.reasoningLevel)];
+  // "openrouter/anthropic/claude-haiku-5.5" is long for a strip: keep the model's own name
+  const model = text(execution?.model)?.split("/").pop() ?? null;
+  const parts = [provider, model, text(execution?.reasoningLevel)];
   const state: AgentState =
     thread.status === "failed" ? "error" : thread.status === "idle" ? "done" : "running";
   return {

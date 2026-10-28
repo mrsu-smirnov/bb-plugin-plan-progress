@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agentsFromRows, toolWord, visibleAgents } from "../agents.ts";
+import { agentFromChild, agentsFromRows, toolWord, visibleAgents } from "../agents.ts";
 
 const delegation = (over = {}) => ({
   kind: "work",
@@ -92,4 +92,18 @@ test("an active background agent without its launch row still gets a strip", () 
   const agents = agentsFromRows([], [{ taskType: "local_agent", description: "Старый", startedAt: 5, itemId: "t9" }]);
   assert.equal(agents.length, 1);
   assert.equal(agents[0].state, "running");
+});
+
+test("a child thread on another provider becomes a strip with provider and model", () => {
+  const thread = { id: "thr_1", title: "Демо: Codex", providerId: "codex", status: "idle", createdAt: 1000, updatedAt: 5000 };
+  assert.deepEqual(agentFromChild(thread, { model: "gpt-6.1-terra", reasoningLevel: "medium" }), {
+    id: "thr_1", name: "Демо: Codex", kind: "Codex", model: "Codex · gpt-6.1-terra · medium",
+    state: "done", tool: null, startedAt: 1000, endedAt: 5000, threadId: "thr_1",
+  });
+  assert.equal(agentFromChild({ ...thread, status: "active" }, null).state, "running");
+  assert.equal(agentFromChild({ ...thread, status: "failed" }, null).model, "Codex");
+  assert.equal(
+    agentFromChild({ ...thread, providerId: "pi" }, { model: "openrouter/anthropic/claude-haiku-5.5" }).model,
+    "Pi · claude-haiku-5.5",
+  );
 });

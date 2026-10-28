@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   definePluginApp,
+  useBbNavigate,
   useComposer,
   useRealtime,
   useRpc,
@@ -514,6 +515,8 @@ const AGENT_COLOR: Record<AgentState, string> = {
 const AGENT_WORD: Record<AgentState, string> = { running: "#9C85D8", done: "#4FA569", error: "#D67278" };
 
 function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effects: boolean }) {
+  const navigate = useBbNavigate();
+  const threadId = agent.threadId;
   const color = AGENT_COLOR[agent.state];
   const running = agent.state === "running";
   const light = mix(hex(color), WHITE, 0.32);
@@ -521,8 +524,12 @@ function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effect
   const model = agent.model ?? agent.kind;
   return (
     <div
-      className="relative flex h-[20px] min-w-0 items-center gap-2 overflow-hidden rounded-full px-2.5 text-[11.5px]"
-      style={{ backgroundColor: "rgba(128,128,128,.14)" }}
+      className={cn(
+        "relative flex h-[20px] min-w-0 items-center gap-2 overflow-hidden rounded-full px-2.5 text-[11.5px]",
+        threadId !== undefined && "cursor-pointer hover:brightness-125",
+      )}
+      onClick={threadId === undefined ? undefined : () => navigate.toThread(threadId, { split: true })}
+      style={{ backgroundColor: `${color}26` }} // the state colour at 15%, as in the original
       title={[agent.name, agent.kind, agent.model].filter(Boolean).join(" · ")}
     >
       {effects && running ? (

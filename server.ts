@@ -17,7 +17,7 @@ import {
   type Bar,
   type Op,
 } from "./engine";
-import { AGENTS_CHANGED, agentsFromRows, type Agent } from "./agents";
+import { AGENTS_CHANGED, agentFromChild, agentsFromRows, type Agent, type ChildThread } from "./agents";
 import { hostContract } from "./host-contract";
 import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
 import { newReminderState, observeWork, type ReminderState } from "./reminders";
@@ -241,7 +241,26 @@ export default async function plugin(bb: BbPluginApi) {
       includeNestedRows: "true",
       segmentLimit: "1",
     });
-    return agentsFromRows(timeline.rows, timeline.activeBackgroundCommands);
+    const own = agentsFromRows(timeline.rows, timeline.activeBackgroundCommands);
+    return [...own, ...(await readChildren(threadId))].sort((a, b) => a.startedAt - b.startedAt);
+  }
+  // Threads this one started on other providers (`bb thread spawn --parent-self`).
+  // The model is in the child's first request; it never changes, so keep it.
+  const childModels = new Map<string, { model?: unknown; reasoningLevel?: unknown } | null>();
+  async function readChildren(threadId: string): Promise<Agent[]> {
+    const children = (await bb.sdk.threads.list({ parentThreadId: threadId })) as unknown as ChildThread[];
+    return Promise.all(
+      children.map(async (child) => {
+        if (!childModels.has(child.id)) {
+          const [first] = await bb.sdk.threads.events.list({
+            threadId: child.id, types: ["client/turn/requested"], limit: "1", order: "asc" as const,
+          });
+          const data = first as unknown as { data?: { execution?: { model?: unknown; reasoningLevel?: unknown } } } | undefined;
+          childModels.set(child.id, data?.data?.execution ?? null);
+        }
+        return agentFromChild(child, childModels.get(child.id) ?? null);
+      }),
+    );
   }
   async function refreshAgents(threadId: string): Promise<void> {
     if (refreshing.has(threadId)) {
@@ -266,12 +285,18 @@ export default async function plugin(bb: BbPluginApi) {
       refreshing.delete(threadId);
     }
   }
-  bb.events.on("experimental_thread.events", ({ thread }) => void refreshAgents(thread.id));
+  bb.events.on("experimental_thread.events", ({ thread }) => {
+    void refreshAgents(thread.id);
+    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
+  });
   bb.events.on("experimental_thread.events", ({ thread }) => void refreshDiagnostic(thread.id));
   bb.events.on("thread.idle", ({ thread }) => void refreshDiagnostic(thread.id));
   bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
   bb.events.on("thread.failed", ({ thread }) => { reminderStates.delete(thread.id); });
-  bb.events.on("thread.idle", ({ thread }) => void refreshAgents(thread.id));
+  bb.events.on("thread.idle", ({ thread }) => {
+    void refreshAgents(thread.id);
+    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
+  });
   bb.events.on("thread.deleted", ({ thread }) => {
     agentsByThread.delete(thread.id);
     diagnostics.delete(thread.id);

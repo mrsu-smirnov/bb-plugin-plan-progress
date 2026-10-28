@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-plan-progress",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "engines": {
     "bb": ">=0.47",

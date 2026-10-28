@@ -101,7 +101,9 @@ test("a child thread on another provider becomes a strip with provider and model
     state: "done", tool: null, startedAt: 1000, endedAt: 5000, threadId: "thr_1",
   });
   assert.equal(agentFromChild({ ...thread, status: "active" }, null).state, "running");
-  assert.equal(agentFromChild({ ...thread, status: "failed" }, null).model, "Codex");
+  assert.equal(agentFromChild({ ...thread, status: "error" }, null).state, "error");
+  assert.equal(agentFromChild({ ...thread, status: "starting" }, null).state, "running");
+  assert.equal(agentFromChild({ ...thread, status: "error" }, null).model, "Codex");
   assert.equal(
     agentFromChild({ ...thread, providerId: "pi" }, { model: "openrouter/anthropic/claude-haiku-5.5" }).model,
     "Pi · claude-haiku-5.5",

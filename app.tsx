@@ -528,7 +528,20 @@ function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effect
         "relative flex h-[20px] min-w-0 items-center gap-2 overflow-hidden rounded-full px-2.5 text-[11.5px]",
         threadId !== undefined && "cursor-pointer hover:brightness-125",
       )}
-      onClick={threadId === undefined ? undefined : () => navigate.toThread(threadId, { split: true })}
+      {...(threadId === undefined
+        ? {}
+        : {
+            role: "button",
+            tabIndex: 0,
+            "aria-label": `${agent.name}: ${agent.model ?? ""}`.trim(),
+            onClick: () => navigate.toThread(threadId, { split: true }),
+            onKeyDown: (event: React.KeyboardEvent) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                navigate.toThread(threadId, { split: true });
+              }
+            },
+          })}
       style={{ backgroundColor: `${color}26` }} // the state colour at 15%, as in the original
       title={[agent.name, agent.kind, agent.model].filter(Boolean).join(" · ")}
     >

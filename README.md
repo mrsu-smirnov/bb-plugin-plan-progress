@@ -118,6 +118,11 @@ thread or deliberately use `bb plan-progress clear` to remove all its plans;
 that explicit clear command is permanent. Plans removed by older versions
 cannot be recovered by this update.
 
+## Coverage and verification
+
+The full [upstream inventory and 0.5.0 candidate delta](docs/upstream-coverage.md)
+separate implemented behavior, remaining differences and verification limits.
+
 ## 0.5.0 work in progress: coverage and limits
 
 The thread-level agents list is independent of plans. It shows at most three

@@ -37,6 +37,7 @@ interface Row {
   background?: unknown;
   taskType?: unknown;
   taskStatus?: unknown;
+  childRef?: unknown;
   itemId?: unknown;
   presentation?: { title?: unknown; detail?: unknown } | null;
 }
@@ -114,17 +115,12 @@ function toAgent(row: Row, running: Map<string, number>): Agent | null {
   let state = stateOf(row.status);
   let endedAt = state === "running" ? null : time(row.completedAt);
   if (row.background === true) {
-    const key = text(row.itemId) ?? id;
+    const key = text(row.childRef) ?? id;
     const left = running.get(key) ?? 0;
     if (left > 0) {
       running.set(key, left - 1);
       state = "running";
       endedAt = null;
-    } else if (row.taskStatus === "completed") {
-      state = "done";
-      endedAt = lastActivity(row) ?? endedAt;
-    } else if (row.taskStatus === "failed") {
-      state = "error";
     } else if (state === "done") {
       state = "unknown";
       endedAt = null;
@@ -150,11 +146,11 @@ function toAgent(row: Row, running: Map<string, number>): Agent | null {
 export function agentsFromRows(rows: readonly unknown[], active: readonly unknown[] = []): Agent[] {
   const running = new Map<string, number>();
   const orphans: Row[] = [];
-  for (const item of active) {
+  for (const item of [...active, ...rows.filter(value => value !== null && typeof value === "object" && (value as Row).kind === "work" && (value as Row).workKind === "workflow")]) {
     if (item === null || typeof item !== "object") continue;
     const task = item as Row;
     const description = text(task.description) ?? text(task.presentation?.title);
-    if (task.taskType !== "local_agent" || description === null) continue;
+    if (task.taskType !== "local_agent" || description === null || (task.taskStatus !== "running" && task.taskStatus !== "pending" && task.taskStatus !== undefined)) continue;
     const id = text(task.itemId) ?? text(task.id);
     if (id !== null) running.set(id, (running.get(id) ?? 0) + 1);
     orphans.push(task);
@@ -166,6 +162,19 @@ export function agentsFromRows(rows: readonly unknown[], active: readonly unknow
     if (row.kind !== "work" || row.workKind !== "delegation") continue;
     const agent = toAgent(row, running);
     if (agent !== null) found.push(agent);
+  }
+  for (const value of rows) {
+    if (!value || typeof value !== "object") continue;
+    const task = value as Row;
+    if (task.kind !== "work" || task.workKind !== "workflow" || task.taskType !== "local_agent") continue;
+    const itemId = text(task.itemId);
+    if (!itemId) continue;
+    const launch = rows.find(value => value && typeof value === "object" && (value as Row).workKind === "delegation" && (value as Row).childRef === itemId) as Row | undefined;
+    const existing = found.find(agent => agent.id === (text(launch?.callId) ?? text(launch?.id)));
+    const state: AgentState = task.taskStatus === "failed" ? "error" : task.taskStatus === "completed" ? "done" : task.taskStatus === "running" || task.taskStatus === "pending" ? "running" : "unknown";
+    if (existing) { existing.state = state; existing.endedAt = state === "running" ? null : time(task.completedAt); if (state !== "running") existing.tool = null; }
+    else found.push({ id: itemId, name: text(task.description) ?? "Background agent", kind: "background agent", model: null, state, tool: null, startedAt: time(task.startedAt) ?? 0, endedAt: state === "running" ? null : time(task.completedAt) });
+    running.set(itemId, 0);
   }
   for (const task of orphans) {
     const description = text(task.description) ?? text(task.presentation?.title)!;

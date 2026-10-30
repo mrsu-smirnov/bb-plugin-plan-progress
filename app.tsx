@@ -346,8 +346,9 @@ function marks(bar: Bar, fill: number): MarkInfo[] {
       if (k > 0) {
         const at = k / total;
         const isStage = j === 0;
-        const passed = at < fill - 0.001;
         const before = isStage ? bar.stages[i - 1] : stage;
+        const finished = (s: Step) => s.status === "done" || s.status === "skipped";
+        const passed = isStage ? !!before && before.steps.every(finished) : finished(stage.steps[j - 1]!);
         const ended: Step | undefined = isStage ? before?.steps.at(-1) : stage.steps[j - 1];
         // a passed mark names what ended there and how long it took; one ahead names what starts there
         let label = passed ? (isStage ? (before?.name ?? "") : (ended?.title ?? "")) : isStage ? stage.name : step.title;
@@ -846,8 +847,8 @@ function Banner() {
         {errors > 0 && <span style={{ color: STATE_COLOR.error }}>{errors} {errors === 1 ? "error" : "errors"}</span>}
         {collapsed && hidden.length > 0 && <span>{hidden.length} hidden</span>}
       </button>
-      {approvals > 0 && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals} open approval {approvals === 1 ? "request" : "requests"} in this thread</div>}
-      {allAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
+      {approvals > 0 && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals} open approval {approvals === 1 ? "request" : "requests"} in this thread and its direct children</div>}
+      {!collapsed && allAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
       {!collapsed && <div id={controls}>
         <div className="divide-y divide-border/60">
           {shown.map(bar => <BarRow key={`${bar.id}:${bar.createdAt}`} bar={bar} now={now} effects={options.effects}

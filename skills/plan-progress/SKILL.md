@@ -26,7 +26,7 @@ Ops:
 - `{id, done:["A"], active:"B"}` — mark done, pick current; steps *active* before B count as done, pending and error ones stay
 - `{id, done:["A"]}` on the active step moves on to the step after it, as `next` does
 - `{id, failed:"B", note}` — the step gets an error and the bar turns red; the next `next` closes it
-- `{id, state:"needs_input", note}` — before asking the user; use an explicit subsequent op to resume after the answer
+- `{id, state:"needs_input", note}` — before asking the user; a confirmed visible human reply or explicit op resumes it
 - `{id, state:"done"}` — finish
 
 States are those of the original: `running`, `needs_input`, `error`, `done`
@@ -84,8 +84,8 @@ The separate Thread agents block shows observed latest-segment delegations and
 direct child threads, even without a plan. Three rows are shown by default;
 expansion is saved per browser and thread. Confirmed errors and unknown outcomes
 remain visible while present in the source. Open approvals in the current
-thread are counted without assigning them to an agent. Provider event sequences
-and automatic detection of confirmed human replies still need live validation.
+thread and its direct children are counted without assigning them to an agent.
+New provider event handling still needs live validation for Claude and Pi.
 
 ## Coexistence with Claude Desktop
 

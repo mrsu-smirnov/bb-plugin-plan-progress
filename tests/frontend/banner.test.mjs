@@ -12,7 +12,7 @@ for (const name of ['window', 'document', 'HTMLElement', 'Node', 'MutationObserv
 Object.defineProperty(globalThis, 'navigator', { value: dom.window.navigator, configurable: true });
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { loadPluginApp, renderSlot } = await import('@get-bb/plugin-sdk/testing/app');
-const { fireEvent, waitFor } = await import('@testing-library/react');
+const { fireEvent, waitFor, act } = await import('@testing-library/react');
 await mkdir('.test-tmp', { recursive: true });
 await build({ entryPoints: ['app.tsx'], outfile: '.test-tmp/app.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
 const app = await loadPluginApp(() => import('../../.test-tmp/app.mjs'));
@@ -130,7 +130,7 @@ test('thread agents remain independent of plan visibility and preserve expansion
       model: null, state: 'running', tool: null, startedAt: Date.now(), endedAt: null }));
     let slot = mount(() => bars, undefined, undefined, () => agents);
     try {
-      if (!agentCount) { await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(slot.queryByLabelText('Thread agents'), null); continue; }
+      if (!agentCount) { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); assert.equal(slot.queryByLabelText('Thread agents'), null); continue; }
       await slot.findByLabelText('Thread agents');
       assert.equal(slot.queryAllByText(/^Task /).length, Math.min(agentCount, 3));
       if (agentCount === 10) {
@@ -142,8 +142,12 @@ test('thread agents remain independent of plan visibility and preserve expansion
         }
         fireEvent.click(slot.getByRole('button', {name: /Thread agents/}));
         assert.equal(slot.queryAllByText(/^Task /).length, 10);
-        if (planCount) fireEvent.click(slot.getByRole('button', {name: /Progress/}));
-        await slot.emitRealtime('agents-changed', {threadId: 'fixture-thread', agents});
+        if (planCount) {
+          fireEvent.click(slot.getByRole('button', {name: /Progress/}));
+          assert.equal(slot.queryAllByText(/^Task /).length, 0);
+          await slot.emitRealtime('agents-changed', {threadId: 'fixture-thread', agents});
+          fireEvent.click(slot.getByRole('button', {name: /Progress/}));
+        }
         assert.equal(slot.queryAllByText(/^Task /).length, 10);
         slot.unmount(); slot = mount(() => bars, undefined, undefined, () => agents);
         await slot.findByLabelText('Thread agents');
@@ -169,8 +173,48 @@ test('open approval count refreshes independently of plans', async () => {
   localStorage.clear(); let count = 1;
   const slot = mount(() => [], undefined, undefined, () => [], () => count);
   try {
-    await slot.findByText('1 open approval request in this thread');
+    await slot.findByText('1 open approval request in this thread and its direct children');
     count = 0; await slot.emitRealtime('approvals-changed', {threadId:'fixture-thread'});
     await waitFor(() => assert.equal(slot.queryByRole('status'), null));
   } finally { slot.unmount(); }
+});
+
+
+test('stage markers reflect their own steps, even out of order and at 100 percent waiting', async () => {
+  for (const state of ['needs_input','error']) {
+    const bar = applyOp([], {id:`ordered-${state}`, title:'Ordered', state, stages:[
+      {name:'First', steps:[{title:'A',status:'active'},{title:'B',status:'done'}]},
+      {name:'Second', steps:[{title:'C',status:'done'},{title:'D',status:'done'}]}]}, 1000).bar;
+    const slot = mount(() => [bar]);
+    try {
+      const track = await slot.findByRole('progressbar');
+      assert.equal(track.getAttribute('aria-valuenow'),'75');
+      const boundary = track.querySelectorAll('.pp-mark')[1];
+      assert.equal(boundary.querySelector('.pp-tip').textContent, 'Second');
+    } finally {slot.unmount();}
+    const complete = {...bar, stages:bar.stages.map(stage => ({...stage,steps:stage.steps.map(step => ({...step,status:'done'}))}))};
+    const full = mount(() => [complete]);
+    try {const track = await full.findByRole('progressbar'); assert.equal(track.getAttribute('aria-valuenow'),'100');
+      assert.match(track.getAttribute('aria-label'), state === 'error' ? /Error/ : /Needs your answer/);
+    } finally {full.unmount();}
+  }
+});
+
+test('late agents RPC cannot overwrite realtime or another thread', async () => {
+  localStorage.clear(); let resolveFirst;
+  const old = {id:'old',name:'Old task',kind:null,model:null,state:'running',tool:null,startedAt:1,endedAt:null};
+  const fresh = {...old,id:'new',name:'New task'};
+  const slot = renderSlot(banner, {}, {context:{threadId:'one',projectId:null},settings:{autoClose:false,effects:false},rpc:{
+    bars_get:()=>({bars:[]}), diagnostics_get:()=>({diagnostic:{source:'bb',warning:null,lastCallSeq:0}}), approvals_get:()=>({count:0}),
+    agents_get:({threadId}) => threadId === 'one' ? new Promise(resolve => {resolveFirst=resolve;}) : ({agents:[]}),
+  }});
+  try {
+    await waitFor(()=>assert.equal(typeof resolveFirst,'function'));
+    await slot.emitRealtime('agents-changed',{threadId:'one',agents:[fresh]});
+    await slot.findByText('New task');
+    await act(async()=>resolveFirst({agents:[old]}));
+    assert.equal(slot.queryByText('Old task'),null);
+    await slot.setComposerScope({kind:'thread',threadId:'two'});
+    await waitFor(()=>assert.equal(slot.queryByText('New task'),null));
+  } finally {slot.unmount();}
 });

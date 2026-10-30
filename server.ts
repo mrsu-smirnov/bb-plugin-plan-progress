@@ -7,6 +7,7 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   allSteps,
+  answered,
   applyOp,
   BARS_CHANGED,
   describe,
@@ -18,6 +19,7 @@ import {
   type Op,
 } from "./engine";
 import { AGENTS_CHANGED, agentFromChild, agentsFromRows, type Agent, type ChildThread } from "./agents";
+import { acceptedHumanRequests, latestChildRun, backgroundEvidence, type EvidenceEvent } from "./evidence";
 import { hostContract } from "./host-contract";
 import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
 import { newReminderState, observeWork, type ReminderState } from "./reminders";
@@ -86,7 +88,7 @@ const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress t
 - If the BB tool is missing or fails, use the same operation with bb plan-progress op '<json>' in the current thread. If that also fails, report the failure; do not silently use the Desktop plugin.
 - A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]}. 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
-- Before asking the user a question: {id, state:"needs_input", note}; after the answer, send an explicit op to resume. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
+- Before asking the user a question: {id, state:"needs_input", note}; an accepted human answer clears it; an explicit op also resumes. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
 - When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.
 - The result already says done/total, state and the active step; do not call it just to check.
@@ -238,45 +240,93 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
-  // Subagent strips. bb says a thread's events moved (at most once a second);
-  // for a thread with bars, read its latest timeline segment and pass the
-  // delegations on when they changed. Nothing is stored.
+  // Read bounded pages, in sequence order; event content is not persisted.
+  async function recentEvents(threadId: string, types: Parameters<typeof bb.sdk.threads.events.list>[0]["types"], pages = 5): Promise<EvidenceEvent[]> {
+    const result: EvidenceEvent[] = [];
+    let beforeSeq: string | undefined;
+    for (let page = 0; page < pages; page++) {
+      const batch = await bb.sdk.threads.events.list({ threadId, types, limit: "100", order: "desc", ...(beforeSeq ? { beforeSeq } : {}) });
+      if (!batch.length) break;
+      result.push(...batch as unknown as EvidenceEvent[]);
+      const min = Math.min(...batch.map(event => event.seq));
+      if (batch.length < 100 || String(min) === beforeSeq) break;
+      beforeSeq = String(min);
+    }
+    return result;
+  }
+  async function refreshAnswers(threadId: string): Promise<void> {
+    try {
+      const events = await recentEvents(threadId, ["client/turn/requested", "turn/input/accepted"]);
+      const times = acceptedHumanRequests(events);
+      if (!times.length) return;
+      await serial(threadId, async () => {
+        const bars = await readBars(threadId);
+        let changed = false;
+        const next = bars.map(bar => {
+          const answerAt = times.filter(at => at > bar.updatedAt).at(-1);
+          if (bar.state !== "needs_input" || answerAt === undefined) return bar;
+          const result = answered([bar], answerAt);
+          changed = true;
+          return result![0]!;
+        });
+        if (changed) await writeBars(threadId, next);
+      });
+    } catch (error) { bb.log.warn(`answer evidence read failed for ${threadId}: ${String(error)}`); }
+  }
+
+  // Read current timeline and bounded event history; retain a bounded error trace.
   const agentsByThread = new Map<string, Agent[]>();
   const refreshing = new Map<string, boolean>();
-  async function readAgents(threadId: string): Promise<Agent[]> {
-    const timeline = await bb.sdk.threads.timeline({
-      threadId,
-      includeNestedRows: "true",
-      segmentLimit: "1",
-    });
-    const own = agentsFromRows(timeline.rows, timeline.activeBackgroundCommands);
-    return [...own, ...(await readChildren(threadId))].sort((a, b) => a.startedAt - b.startedAt);
+  async function listChildren(threadId: string): Promise<ChildThread[]> {
+    const children: ChildThread[] = [];
+    for (let offset = 0; offset < 500; offset += 100) {
+      const page = await bb.sdk.threads.list({ parentThreadId: threadId, limit: 100, offset }) as unknown as ChildThread[];
+      children.push(...page);
+      if (page.length < 100) break;
+    }
+    return children;
   }
-  // Threads this one started on other providers (`bb thread spawn --parent-self`).
-  // Read the latest request for the current model; never reuse the first run.
-  const childModels = new Map<string, { model?: unknown; reasoningLevel?: unknown }>();
+  async function readAgents(threadId: string): Promise<Agent[]> {
+    const [timeline, children, events] = await Promise.all([
+      bb.sdk.threads.timeline({ threadId, includeNestedRows: "true", segmentLimit: "1" }),
+      readChildren(threadId),
+      recentEvents(threadId, ["item/completed", "item/backgroundTask/completed", "item/backgroundTask/progress"]),
+    ]);
+    const own = agentsFromRows(timeline.rows, timeline.activeBackgroundCommands);
+    const evidence = backgroundEvidence(events);
+    for (const [id, result] of evidence) {
+      const launch = timeline.rows.find(row => row.kind === "work" && row.workKind === "delegation" && row.childRef === id);
+      const agent = own.find(a => a.id === id || (launch?.kind === "work" && launch.workKind === "delegation" && a.id === launch.callId));
+      if (agent && result.at >= agent.startedAt) { agent.state = result.state; agent.endedAt = result.end; if (agent.state !== "running") agent.tool = null; }
+      else if (!agent) own.push({ id, name: result.name, kind: "background agent", model: null, state: result.state,
+        tool: null, startedAt: result.at, endedAt: result.end });
+    }
+    const current = [...own, ...children];
+    // Bounded error trace survives timeline eviction and plugin restart. A current
+    // observation of the same ID supersedes the saved trace.
+    const key = `agent-errors:${threadId}`;
+    const saved = (await bb.storage.kv.get<Agent[]>(key)) ?? [];
+    const currentIds = new Set(current.map(agent => agent.id));
+    const errors = [...saved.filter(agent => !currentIds.has(agent.id)), ...current.filter(agent => agent.state === "error")]
+      .sort((a,b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt)).slice(0, 100);
+    if (JSON.stringify(saved) !== JSON.stringify(errors)) await bb.storage.kv.set(key, errors);
+    return [...current, ...errors.filter(agent => !currentIds.has(agent.id))].sort((a, b) => a.startedAt - b.startedAt);
+  }
   async function readChildren(threadId: string): Promise<Agent[]> {
-    const children = (await bb.sdk.threads.list({ parentThreadId: threadId })) as unknown as ChildThread[];
-    return Promise.all(
-      children.map(async (child) => {
-        // A missing request does not inherit a previous run's model.
-        // One child that cannot be read never takes the other strips down with it.
-        {
-          try {
-            const [first] = await bb.sdk.threads.events.list({
-              threadId: child.id, types: ["client/turn/requested"], limit: "1", order: "desc" as const,
-            });
-            const data = first as unknown as { data?: { execution?: { model?: unknown; reasoningLevel?: unknown } } } | undefined;
-            childModels.delete(child.id);
-            if (data?.data?.execution) childModels.set(child.id, data.data.execution);
-          } catch (error) {
-            childModels.delete(child.id);
-            bb.log.warn(`child model read failed for ${child.id}: ${String(error)}`);
-          }
-        }
-        return agentFromChild(child, childModels.get(child.id) ?? null);
-      }),
-    );
+    const children = await listChildren(threadId);
+    return Promise.all(children.map(async child => {
+      try {
+        const events = await recentEvents(child.id, ["client/turn/requested", "turn/completed", "turn/mainRun/updated"]);
+        const run = latestChildRun(events);
+        const agent = agentFromChild(child, child.status === "idle" && (run.state === "done" || run.state === "error") ? run.execution : null);
+        if (child.status === "idle" && run.state !== "running") agent.state = run.state;
+        if (run.at !== null) agent.startedAt = run.at;
+        return agent;
+      } catch (error) {
+        bb.log.warn(`child event read failed for ${child.id}: ${String(error)}`);
+        return agentFromChild(child, null);
+      }
+    }));
   }
   async function refreshAgents(threadId: string): Promise<void> {
     if (refreshing.has(threadId)) {
@@ -302,13 +352,18 @@ export default async function plugin(bb: BbPluginApi) {
   }
   bb.events.on("experimental_thread.events", ({ thread }) => {
     void refreshAgents(thread.id);
+    void refreshAnswers(thread.id);
     if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
   });
   bb.events.on("experimental_thread.events", ({ thread }) => {
     void refreshDiagnostic(thread.id);
     bb.realtime.publish("approvals-changed", { threadId: thread.id });
+    if (thread.parentThreadId) bb.realtime.publish("approvals-changed", { threadId: thread.parentThreadId });
   });
-  bb.events.on("interaction.pending", ({ thread }) => bb.realtime.publish("approvals-changed", { threadId: thread.id }));
+  bb.events.on("interaction.pending", ({ thread }) => {
+    bb.realtime.publish("approvals-changed", { threadId: thread.id });
+    if (thread.parentThreadId) bb.realtime.publish("approvals-changed", { threadId: thread.parentThreadId });
+  });
   bb.events.on("thread.idle", ({ thread }) => void refreshDiagnostic(thread.id));
   bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
   bb.events.on("thread.failed", ({ thread }) => {
@@ -320,9 +375,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
   });
   bb.events.on("thread.deleted", ({ thread }) => {
-    childModels.delete(thread.id);
     if (thread.parentThreadId) void refreshAgents(thread.parentThreadId); // its strip goes
     agentsByThread.delete(thread.id);
+    void bb.storage.kv.delete(`agent-errors:${thread.id}`);
     diagnostics.delete(thread.id);
     diagnosticCursors.delete(thread.id);
     reminderStates.delete(thread.id);
@@ -360,13 +415,15 @@ export default async function plugin(bb: BbPluginApi) {
       await refreshDiagnostic(threadId);
       return { diagnostic: diagnostics.get(threadId) ?? NO_DIAGNOSTIC };
     },
-    bars_get: async ({ threadId }) => ({ bars: await readBars(threadId) }),
+    bars_get: async ({ threadId }) => { await refreshAnswers(threadId); return { bars: await readBars(threadId) }; },
     agents_get: async ({ threadId }) => ({
       agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
     }),
-    approvals_get: async ({ threadId }) => ({
-      count: (await bb.sdk.threads.interactions.list({ threadId })).filter(item => item.payload.kind === "approval").length,
-    }),
+    approvals_get: async ({ threadId }) => {
+      const children = await listChildren(threadId);
+      const lists = await Promise.all([threadId, ...children.map(child => child.id)].map(id => bb.sdk.threads.interactions.list({ threadId: id })));
+      return { count: lists.flat().filter(item => item.payload.kind === "approval" && item.status === "pending").length };
+    },
     // Retained for an already-open 0.3 frontend during a live update. Hide, never delete.
     bars_dismiss: ({ threadId, id }) =>
       serial(threadId, async () => {

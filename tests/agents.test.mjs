@@ -68,9 +68,10 @@ test("a background agent runs while bb lists it as active", () => {
     status: "completed",
     completedAt: 1100,
     background: true,
+    childRef: "task-id",
     childRows: [{ kind: "work", workKind: "file-read", status: "pending", startedAt: 1200 }],
   });
-  const active = [{ taskType: "local_agent", description: "Разбор плана", startedAt: 1050, itemId: "bg" }];
+  const active = [{ taskType: "local_agent", description: "Разбор плана", startedAt: 1050, itemId: "task-id" }];
   const [running] = agentsFromRows([launched], active);
   assert.equal(running.state, "running");
   assert.equal(running.tool, "Read");
@@ -86,11 +87,7 @@ test("a background agent runs while bb lists it as active", () => {
   const [done] = agentsFromRows([finished], []);
   assert.equal(done.state, "unknown");
   assert.equal(done.endedAt, null);
-  const [confirmed] = agentsFromRows([{ ...finished, taskStatus: "completed" }], []);
-  assert.equal(confirmed.state, "done");
-  const [failed] = agentsFromRows([{ ...finished, taskStatus: "failed" }], []);
-  assert.equal(failed.state, "error");
-  assert.equal(visibleAgents([failed], 9999999, 5000).length, 1);
+
 });
 
 test("an active background agent without its launch row still gets a strip", () => {
@@ -113,4 +110,13 @@ test("a child thread on another provider becomes a strip with provider and model
     agentFromChild({ ...thread, providerId: "pi" }, { model: "openrouter/anthropic/claude-haiku-5.5" }).model,
     "claude-haiku-5.5",
   );
+});
+
+
+test('workflow outcomes use childRef, not callId equality', () => {
+  const launch = delegation({callId:'call', childRef:'task', background:true,status:'completed'});
+  const workflow = {kind:'work',workKind:'workflow',itemId:'task',taskType:'local_agent',taskStatus:'failed',status:'error',description:'Task',startedAt:1200,completedAt:9000};
+  const agents = agentsFromRows([launch,workflow]);
+  assert.equal(agents.length,1); assert.equal(agents[0].id,'call'); assert.equal(agents[0].state,'error');
+  assert.equal(agentsFromRows([workflow])[0].state,'error');
 });

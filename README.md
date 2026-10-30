@@ -68,7 +68,7 @@ cannot be guaranteed; this is not a universal gate before every work tool.
 The original tool is isolated only for the known `plan-progress@zycck-mods` id.
 An installation under another marketplace id requires separate configuration.
 
-Validated on Linux with Claude Code, Codex, and Pi. The Windows launcher follows
+Earlier isolation and basic progress features were validated on Linux with Claude Code, Codex, and Pi; this does not validate the new 0.5.0 event handling. The Windows launcher follows
 the Claude SDK's JavaScript executable contract, but has not been tested on a
 Windows host. Claude Desktop's GUI was not driven in these checks: the native
 plugin list confirms enabled in an ordinary launch, disabled in the BB launch,
@@ -122,21 +122,19 @@ cannot be recovered by this update.
 
 The thread-level agents list is independent of plans. It shows at most three
 rows by default, prioritises errors and running work, and remembers expansion
-in this browser for each thread. Error and unknown rows remain visible while
-present in the source; completed rows disappear after five seconds. A pending
-approval in the current thread is shown separately, without attributing it to
-an agent. The list covers delegation rows in the latest timeline segment and
-direct child BB threads, not arbitrary ownership trees or older segments.
+in this browser for each thread. The Progress control hides the list without
+changing its expansion choice. Error traces are retained in plugin storage,
+with a limit of 100 per thread. Completed rows disappear after five seconds.
+Pending approvals in the current thread and direct child threads are counted
+without attributing them to an individual agent.
 
-A successful background launch is not proof of completion. Only an explicit
-background `taskStatus` of `completed` or `failed` is treated as an outcome;
-otherwise the outcome is unknown. Active tasks are associated by ID, not by
-description. An idle child is unknown, not automatically successful. The latest
-child execution supplies the model; no child duration is shown because the
-current run's start is not yet reliably established. These are conservative
-interpretations of SDK data, not validated live provider guarantees. Approval
-counts only cover the current thread, and lifecycle refresh and provider
-sequences require live verification.
+Delegation rows and background workflow items are matched through `childRef`
+and item IDs; normalized background task events supply confirmed outcomes.
+A launch or an absent active task is not proof of success. Child outcomes use
+the latest request and subsequent turn completion, never idle alone. The
+child model is hidden during active work, and child duration is not displayed.
+Reads are bounded to 500 recent events and 500 direct children; the list is not
+an arbitrary ownership tree. Historical errors are retained once observed.
 
 Skipped steps count as finished in text, track and ARIA. A plan may show 100%
 while its state is needs_input or error. A stage boundary shows the wall-clock
@@ -144,13 +142,15 @@ span from the first observed step start to the last observed step end: gaps and
 overlap are included, so this is not summed effort or a measure of parallel
 work. If no start/end was observed, no duration is displayed.
 
-Thread activation no longer clears needs_input. An explicit subsequent plan op
-clears or changes it, but automatic clearing on a confirmed human answer is
-not yet implemented. Live event evidence for Claude, Codex and Pi, full
-recovery across timeline pages, approval resolution and resumed child runs is
-still required before calling the release complete. The prior 0.4.0 audit and
-scope remain in Git history; this is a partial port of the pinned upstream
-`b77335ee560c609d67ae85c7321f886719361426`, not a parity claim.
+Thread activation alone does not clear needs_input. A visible human request
+accepted by the provider clears an older waiting state; hidden agent-only input,
+system messages, other agents and retries do not. An explicit plan op also
+changes the state. Matching uses request IDs and request timestamps; bounded
+event reads and timestamps mean very old or indistinguishable events cannot
+be proved. Live event evidence for the new Claude and Pi scenarios is still
+needed; those providers are not currently registered on the test host. The
+prior 0.4.0 audit and scope remain in Git history. This is a partial port of
+pinned upstream `b77335ee560c609d67ae85c7321f886719361426`.
 
 ## Develop
 

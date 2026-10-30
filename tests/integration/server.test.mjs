@@ -139,3 +139,96 @@ test("hiding through RPC keeps the plan updatable, survives reload, and is rever
     assert.equal(JSON.parse(config.stdout).length, 1);
   } finally { await h.dispose(); }
 });
+
+test('accepted human replies clear only older waits, never hidden messages or replay', async () => {
+  let events = [];
+  const {bb, harness:h} = createFakePluginHost({pluginId:'plan-progress', sdk:{threads:{events:{list: async args => events
+    .filter(e => (!args.types || args.types.includes(e.type)) && (!args.beforeSeq || e.seq < Number(args.beforeSeq)))
+    .sort((a,b) => b.seq-a.seq).slice(0,Number(args.limit || 100))}}}});
+  try {
+    await plugin(bb);
+    await h.callAgentTool('plan_progress',{id:'wait',steps:[{title:'A'},{title:'B'}],state:'needs_input'});
+    let {bars} = await h.callRpc('bars_get',{threadId:'thread-test'});
+    const at = bars[0].updatedAt;
+    const req = (seq, createdAt, input) => ({seq,createdAt,type:'client/turn/requested',data:{requestId:`r${seq}`,initiator:'user',senderThreadId:null,systemMessageKind:'unlabeled',input}});
+    const accept = (seq, id, createdAt) => ({seq,createdAt,type:'turn/input/accepted',data:{clientRequestId:id}});
+    events = [req(1,at+10,[{type:'text',visibility:'agent-only'}]),accept(2,'r1',at+11)];
+    ({bars}=await h.callRpc('bars_get',{threadId:'thread-test'})); assert.equal(bars[0].state,'needs_input');
+    events.push(req(3,at+20,[{type:'text'}]),accept(4,'r3',at+21));
+    ({bars}=await h.callRpc('bars_get',{threadId:'thread-test'})); assert.equal(bars[0].state,'running');
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await h.callAgentTool('plan_progress',{id:'wait',state:'needs_input'});
+    // The previously accepted request cannot clear a newer question even after restart.
+    const reloaded = (await h.lifecycle.reload(plugin)).harness;
+    ({bars}=await reloaded.callRpc('bars_get',{threadId:'thread-test'}));
+    assert.equal(bars[0].state,'needs_input');
+  } finally { await h.dispose(); }
+});
+
+test('approval count includes only pending approvals of the thread and direct children', async () => {
+  let status = 'pending';
+  const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    list:async args => args.offset ? [] : [{id:'child'}],
+    interactions:{list:async ({threadId}) => threadId === 'child' ? [{status,payload:{kind:'approval'}}] : [{status:'resolved',payload:{kind:'approval'}},{status:'pending',payload:{kind:'question'}}]},
+  }}});
+  try {
+    await plugin(bb);
+    assert.equal((await h.callRpc('approvals_get',{threadId:'thread-test'})).count,1);
+    for (status of ['resolved','interrupted','resolving']) assert.equal((await h.callRpc('approvals_get',{threadId:'thread-test'})).count,0);
+  } finally { await h.dispose(); }
+});
+
+test('failed workflow survives timeline eviction and plugin reload', async () => {
+  let rows = [{kind:'work',workKind:'delegation',callId:'call',childRef:'task',background:true,status:'completed',startedAt:100,completedAt:110,description:'Task'},
+    {kind:'work',workKind:'workflow',itemId:'task',taskType:'local_agent',taskStatus:'failed',status:'error',description:'Task',startedAt:120,completedAt:900}];
+  const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows,activeBackgroundCommands:[]}), list:async()=>[], events:{list:async()=>[]},
+  }}});
+  try {
+    await plugin(bb);
+    let result = await h.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(result.agents.length,1); assert.equal(result.agents[0].state,'error');
+    rows = [];
+    const reload = (await h.lifecycle.reload(plugin)).harness;
+    result = await reload.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(result.agents.length,1); assert.equal(result.agents[0].state,'error');
+  } finally {await h.dispose();}
+});
+
+test('direct child result follows the latest run without exposing the old model on restart', async () => {
+  let status = 'idle';
+  let events = [{seq:1,createdAt:100,type:'client/turn/requested',data:{execution:{model:'old'}}},
+    {seq:2,createdAt:200,type:'turn/completed',data:{status:'completed'}}];
+  const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows:[],activeBackgroundCommands:[]}),
+    list:async ({offset})=>offset ? [] : [{id:'child',title:'Child',providerId:'codex',status,createdAt:10,updatedAt:200}],
+    events:{list:async ({types})=>events.filter(e=>types?.includes(e.type)).sort((a,b)=>b.seq-a.seq)},
+  }}});
+  try {
+    await plugin(bb);
+    let result = await h.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(result.agents[0].state,'done'); assert.equal(result.agents[0].model,'old');
+    status='active';
+    const reload = (await h.lifecycle.reload(plugin)).harness;
+    result = await reload.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(result.agents[0].state,'running'); assert.equal(result.agents[0].model,null);
+  } finally {await h.dispose();}
+});
+
+test('background completion events provide outcomes without inventing fields on delegation rows', async () => {
+  let outcome = 'failed';
+  const row = {kind:'work',workKind:'delegation',callId:'launch',childRef:'task',background:true,status:'completed',startedAt:100,completedAt:110,description:'Task'};
+  const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows:[row],activeBackgroundCommands:[]}), list:async()=>[],
+    events:{list:async ({types})=>types?.includes('item/backgroundTask/completed') ? [{seq:1,createdAt:500,type:'item/backgroundTask/completed',data:{item:{type:'backgroundTask',id:'task',taskType:'local_agent',taskStatus:outcome,description:'Task'}}}] : []},
+  }}});
+  try {
+    await plugin(bb);
+    let result = await h.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(result.agents.length,1); assert.equal(result.agents[0].state,'error');
+    outcome='completed';
+    const reload = (await h.lifecycle.reload(plugin)).harness;
+    result = await reload.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(result.agents.length,1); assert.equal(result.agents[0].state,'done');
+  } finally {await h.dispose();}
+});

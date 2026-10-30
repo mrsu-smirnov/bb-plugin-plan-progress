@@ -18,6 +18,9 @@ export interface Agent {
   tool: string | null;
   startedAt: number;
   endedAt: number | null;
+  /** IDs and state timestamp used to reconcile normalized observations. */
+  aliases?: string[];
+  observedAt?: number;
   /** Set for a child thread (it has a thread of its own to open); absent for an agent of the turn. */
   threadId?: string;
 }
@@ -189,8 +192,9 @@ export function agentsFromRows(input: readonly unknown[], active: readonly unkno
     const launch = rows.find(value => value && typeof value === "object" && (value as Row).workKind === "delegation" && (value as Row).childRef === itemId) as Row | undefined;
     const existing = found.find(agent => agent.id === (text(launch?.callId) ?? text(launch?.id)));
     const state: AgentState = task.taskStatus === "failed" ? "error" : task.taskStatus === "completed" ? "done" : task.taskStatus === "running" || task.taskStatus === "pending" ? "running" : "unknown";
-    if (existing) { existing.state = state; existing.endedAt = state === "running" ? null : time(task.completedAt); if (state !== "running") existing.tool = null; }
-    else found.push({ id: itemId, name: text(task.description) ?? "Background agent", kind: "background agent", model: null, state, tool: null, startedAt: time(task.startedAt) ?? 0, endedAt: state === "running" ? null : time(task.completedAt) });
+    const observedAt = time(task.completedAt) ?? time(task.startedAt) ?? 0;
+    if (existing) { existing.state = state; existing.endedAt = state === "running" ? null : time(task.completedAt); existing.observedAt = observedAt; existing.aliases = [itemId]; if (state !== "running") existing.tool = null; }
+    else found.push({ id: itemId, aliases: [itemId], observedAt, name: text(task.description) ?? "Background agent", kind: "background agent", model: null, state, tool: null, startedAt: time(task.startedAt) ?? 0, endedAt: state === "running" ? null : time(task.completedAt) });
     running.set(itemId, 0);
   }
   for (const task of orphans) {

@@ -6,22 +6,26 @@ available as a current document instead of relying on old Git history.
 
 ## 0.5.0 candidate delta
 
-Candidate code: `4cc39e00ca739b6a6abb6f53bfde3c2a68eda6ab`. Publication and
+Candidate code: the current release branch, building on `fd265a8` and the 4cc review fixes. Publication and
 final independent acceptance are pending. The implementation targets three
 packages; it does not promise full upstream parity.
 
 | Area | Implemented in the candidate | Verification boundary |
 | --- | --- | --- |
 | Independent compact agents | Thread-level block, three rows plus counts, expansion memory, independent of plan visibility; whole Progress collapse hides the agents too | Component matrix 0/1/3/10 agents with 0/1/9 plans; final browser acceptance pending |
-| Delegation collection | Flat collection traverses BB's turn.children grouping and childRows; native delegation completion remains distinct from background launch completion | A real Codex native-agent trace confirmed turn.children and separate root/agent scopes; anonymised regression fixtures cover those shapes |
+| Delegation collection | Flat collection traverses BB's turn.children grouping (delegation childRows remain activity, not ownership);  native delegation completion remains distinct from background launch completion | A real Codex native-agent trace confirmed turn.children and separate root/agent scopes; anonymised regression fixtures cover those shapes |
 | Outcomes | Workflow/backgroundTask outcomes joined using public identifiers; unknown stays unknown; child outcome uses the main turn that accepted the latest request | SDK fixtures and recorded Codex traces; fresh Claude/Pi sequences unavailable on this server |
-| Errors | Observed errors retained in a bounded per-thread KV trace across segment changes/reload; a new observation of the same id supersedes the trace | Integration checks; bounded to 100 retained error entries |
-| Approvals | General pending-approval signal includes current thread and direct child threads; no invented assignment to a particular native agent | Server/UI fixtures cover lifecycle refresh; final live approve/deny/cancel check pending |
+| Errors | Observed errors retained in a bounded per-thread KV trace across segment changes/reload; unknown and stale observations do not supersede the trace; newer terminal evidence or a proven new run can replace it | Integration checks; bounded to 100 retained error entries |
+| Approvals | General pending-approval signal includes current thread and direct child threads, and marks incomplete coverage on failed reads; no invented assignment to a particular native agent | Server/UI fixtures cover lifecycle refresh; final live approve/deny/cancel check pending |
 | Human replies | Visible user request correlated with its input-accepted event, excluding hidden reminders, system/agent sends, retries and answers older than the waiting state | Real envelope shapes from Codex and historic Claude/Pi demos; integration tests protect negative cases |
 | Model/duration | No inherited first-run model presented as current; child model hidden while active when correlation is not sufficient; unreliable child duration omitted | Resumed-run fixtures; live review boundary stated explicitly |
 | Plan displays | skipped agrees in percentage/fill/ARIA; stage timing is a documented wall-clock span; unknown time is omitted; checkpoint completion uses step states | Tests cover out-of-order steps and all-finished needs_input/error; final browser acceptance pending |
 
 The candidate reads up to 500 matching recent events and 500 direct children.
+Unchanged snapshots and in-flight reads are shared until the relevant thread
+changes. An SDK-harness run with ten separated child notifications measured
+1 timeline, 1 child-list and 20 event reads without a mounted UI (previously
+20, 20 and 140); this is a bounded scenario, not a production benchmark.
 No arbitrary ownership tree, full historical import, approved Plan Mode import,
 blocking Stop/tool hooks, translations or plugin-specific updater are included.
 Read the release verification record before treating any pending live check as

@@ -36,7 +36,7 @@ function mount(getBars, change = () => {}, settings = { autoClose: false, effect
     settings, rpc: {
       bars_get: () => ({ bars: getBars() }),
       agents_get: () => ({ agents: getAgents() }),
-      approvals_get: () => ({ count: getApprovals() }),
+      approvals_get: () => ({ count: getApprovals(), incomplete: false }),
       diagnostics_get: () => ({ diagnostic: { source: 'bb', warning: null, lastCallSeq: 0 } }),
       bars_setVisibility: args => { change(args); return { changed: true }; },
     } });
@@ -205,7 +205,7 @@ test('late agents RPC cannot overwrite realtime or another thread', async () => 
   const old = {id:'old',name:'Old task',kind:null,model:null,state:'running',tool:null,startedAt:1,endedAt:null};
   const fresh = {...old,id:'new',name:'New task'};
   const slot = renderSlot(banner, {}, {context:{threadId:'one',projectId:null},settings:{autoClose:false,effects:false},rpc:{
-    bars_get:()=>({bars:[]}), diagnostics_get:()=>({diagnostic:{source:'bb',warning:null,lastCallSeq:0}}), approvals_get:()=>({count:0}),
+    bars_get:()=>({bars:[]}), diagnostics_get:()=>({diagnostic:{source:'bb',warning:null,lastCallSeq:0}}), approvals_get:()=>({count:0,incomplete:false}),
     agents_get:({threadId}) => threadId === 'one' ? new Promise(resolve => {resolveFirst=resolve;}) : ({agents:[]}),
   }});
   try {
@@ -216,5 +216,29 @@ test('late agents RPC cannot overwrite realtime or another thread', async () => 
     assert.equal(slot.queryByText('Old task'),null);
     await slot.setComposerScope({kind:'thread',threadId:'two'});
     await waitFor(()=>assert.equal(slot.queryByText('New task'),null));
+  } finally {slot.unmount();}
+});
+
+
+test('partial approval coverage displays both known requests and uncertainty', async () => {
+  const slot = renderSlot(banner, {}, {context:{threadId:'one',projectId:null},settings:{autoClose:false,effects:false},rpc:{
+    bars_get:()=>({bars:[]}),agents_get:()=>({agents:[]}),diagnostics_get:()=>({diagnostic:{source:'bb',warning:null,lastCallSeq:0}}),
+    approvals_get:()=>({count:1,incomplete:true}),
+  }});
+  try {const status=await slot.findByText(/1 open approval request/);assert.match(status.textContent,/some approvals could not be checked/);}
+  finally {slot.unmount();}
+});
+
+
+test('no plans does not claim hidden plans and collapsed summary retains agent errors', async () => {
+  localStorage.clear();
+  const agents=[{id:'failed',name:'Failed task',kind:null,model:null,state:'error',tool:null,startedAt:1,endedAt:2}];
+  const slot=mount(()=>[],undefined,undefined,()=>agents);
+  try {
+    await slot.findByText('Failed task');
+    assert.equal(slot.queryByText('All plans are hidden.'),null);
+    fireEvent.click(slot.getByRole('button',{name:/Progress · 0/}));
+    assert.equal(slot.queryByText('Failed task'),null);
+    assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/Thread agents · 1.*1 errors.*0 unknown/);
   } finally {slot.unmount();}
 });

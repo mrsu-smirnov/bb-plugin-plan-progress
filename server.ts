@@ -42,7 +42,7 @@ export const rpcContract = defineRpcContract({
   },
   approvals_get: {
     input: z.object({ threadId: z.string().min(1) }),
-    output: z.object({ count: z.number() }),
+    output: z.object({ count: z.number(), incomplete: z.boolean() }),
   },
   bars_dismiss: {
     input: z.object({ threadId: z.string().min(1), id: z.string().min(1) }),
@@ -240,8 +240,31 @@ export default async function plugin(bb: BbPluginApi) {
     });
   }
 
+  // Share in-flight reads and reuse snapshots until that thread changes.
+  const snapshots = new Map<string, Promise<any>>();
+  const childSnapshots = new Map<string, ChildThread[]>();
+  function cached<T>(threadId: string, kind: string, read: () => Promise<T>): Promise<T> {
+    const key = `${threadId}:${kind}`;
+    const previous = snapshots.get(key);
+    if (previous) return previous as Promise<T>;
+    const pending = read().catch(error => { if (snapshots.get(key) === pending) snapshots.delete(key); throw error; });
+    snapshots.set(key, pending);
+    return pending;
+  }
+  function invalidate(threadId: string): void {
+    for (const key of snapshots.keys()) if (key.startsWith(`${threadId}:`)) snapshots.delete(key);
+  }
+  function updateChild(parentId: string, thread: Partial<ChildThread> & {id: string}): void {
+    const children = childSnapshots.get(parentId);
+    if (!children) return;
+    const index = children.findIndex(child => child.id === thread.id);
+    if (index < 0) { snapshots.delete(`${parentId}:children`); childSnapshots.delete(parentId); return; }
+    children[index] = { ...children[index]!, ...thread };
+  }
+
   // Read bounded pages, in sequence order; event content is not persisted.
   async function recentEvents(threadId: string, types: Parameters<typeof bb.sdk.threads.events.list>[0]["types"], pages = 5): Promise<EvidenceEvent[]> {
+    return cached(threadId, `events:${types?.join(",")}:${pages}`, async () => {
     const result: EvidenceEvent[] = [];
     let beforeSeq: string | undefined;
     for (let page = 0; page < pages; page++) {
@@ -253,6 +276,7 @@ export default async function plugin(bb: BbPluginApi) {
       beforeSeq = String(min);
     }
     return result;
+    });
   }
   async function refreshAnswers(threadId: string): Promise<void> {
     try {
@@ -278,17 +302,21 @@ export default async function plugin(bb: BbPluginApi) {
   const agentsByThread = new Map<string, Agent[]>();
   const refreshing = new Map<string, boolean>();
   async function listChildren(threadId: string): Promise<ChildThread[]> {
+    return cached(threadId, "children", async () => {
     const children: ChildThread[] = [];
     for (let offset = 0; offset < 500; offset += 100) {
       const page = await bb.sdk.threads.list({ parentThreadId: threadId, limit: 100, offset }) as unknown as ChildThread[];
       children.push(...page);
       if (page.length < 100) break;
     }
+    childSnapshots.set(threadId, children);
     return children;
+    });
   }
   async function readAgents(threadId: string): Promise<Agent[]> {
+    return cached(threadId, "agents", async () => {
     const [timeline, children, events] = await Promise.all([
-      bb.sdk.threads.timeline({ threadId, includeNestedRows: "true", segmentLimit: "1" }),
+      cached(threadId, "timeline", () => bb.sdk.threads.timeline({ threadId, includeNestedRows: "true", segmentLimit: "1" })),
       readChildren(threadId),
       recentEvents(threadId, ["item/completed", "item/backgroundTask/completed", "item/backgroundTask/progress"]),
     ]);
@@ -297,23 +325,41 @@ export default async function plugin(bb: BbPluginApi) {
     for (const [id, result] of evidence) {
       const launch = flattenTurnRows(timeline.rows).find(value => {
         const row = value as {kind?: string; workKind?: string; childRef?: string};
-        return row.kind === "work" && row.workKind === "delegation" && row.childRef === id;
+        return row.kind === "work" && row.workKind === "delegation" && row.childRef === result.itemId;
       }) as {callId?: string} | undefined;
-      const agent = own.find(a => a.id === id || a.id === launch?.callId);
-      if (agent && result.at >= agent.startedAt) { agent.state = result.state; agent.endedAt = result.end; if (agent.state !== "running") agent.tool = null; }
-      else if (!agent) own.push({ id, name: result.name, kind: "background agent", model: null, state: result.state,
-        tool: null, startedAt: result.at, endedAt: result.end });
+      const agent = own.find(a => [a.id, ...(a.aliases ?? [])].some(alias => result.aliases.includes(alias)) || a.id === launch?.callId);
+      if (agent) {
+        agent.aliases = [...new Set([...(agent.aliases ?? []), ...result.aliases])];
+        const observedAt = agent.observedAt ?? agent.endedAt ?? agent.startedAt;
+        if (result.state !== "unknown" && result.observedAt > observedAt &&
+            !(result.state === "running" && (agent.state === "done" || agent.state === "error"))) {
+          agent.state = result.state; agent.endedAt = result.end; agent.observedAt = result.observedAt;
+          if (agent.state !== "running") agent.tool = null;
+        }
+      } else own.push({ id, aliases: result.aliases, observedAt: result.observedAt, name: result.name, kind: "background agent", model: null,
+        state: result.state, tool: null, startedAt: result.at, endedAt: result.end });
     }
     const current = [...own, ...children];
-    // Bounded error trace survives timeline eviction and plugin restart. A current
-    // observation of the same ID supersedes the saved trace.
+    // Unknown or stale observations do not erase confirmed errors. A new run
+    // must start after the error; a terminal replacement must be newer.
     const key = `agent-errors:${threadId}`;
     const saved = (await bb.storage.kv.get<Agent[]>(key)) ?? [];
-    const currentIds = new Set(current.map(agent => agent.id));
-    const errors = [...saved.filter(agent => !currentIds.has(agent.id)), ...current.filter(agent => agent.state === "error")]
-      .sort((a,b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt)).slice(0, 100);
+    const same = (a: Agent, b: Agent) => [a.id, ...(a.aliases ?? [])].some(id => [b.id, ...(b.aliases ?? [])].includes(id));
+    const retained: Agent[] = [];
+    for (const old of saved) {
+      const index = current.findIndex(agent => same(agent, old));
+      if (index < 0) { retained.push(old); continue; }
+      const next = current[index]!;
+      const errorAt = old.observedAt ?? old.endedAt ?? old.startedAt;
+      const newerRun = next.state === "running" && next.startedAt > errorAt;
+      const newerTerminal = (next.state === "done" || next.state === "error") && (next.observedAt ?? next.endedAt ?? 0) > errorAt;
+      if (!newerRun && !newerTerminal) current[index] = old;
+    }
+    const errors = [...retained, ...current.filter(agent => agent.state === "error")]
+      .sort((a,b) => (b.observedAt ?? b.endedAt ?? b.startedAt) - (a.observedAt ?? a.endedAt ?? a.startedAt)).slice(0, 100);
     if (JSON.stringify(saved) !== JSON.stringify(errors)) await bb.storage.kv.set(key, errors);
-    return [...current, ...errors.filter(agent => !currentIds.has(agent.id))].sort((a, b) => a.startedAt - b.startedAt);
+    return [...current, ...retained].sort((a, b) => a.startedAt - b.startedAt);
+    });
   }
   async function readChildren(threadId: string): Promise<Agent[]> {
     const children = await listChildren(threadId);
@@ -354,16 +400,18 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
   bb.events.on("experimental_thread.events", ({ thread }) => {
-    void refreshAgents(thread.id);
-    void refreshAnswers(thread.id);
-    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
+    invalidate(thread.id);
+    if (agentsByThread.has(thread.id)) void refreshAgents(thread.id);
+    void readBars(thread.id).then(bars => { if (bars.some(bar => bar.state === "needs_input")) void refreshAnswers(thread.id); });
+    if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("experimental_thread.events", ({ thread }) => {
-    void refreshDiagnostic(thread.id);
+    if (reminderStates.has(thread.id) || diagnostics.has(thread.id)) void refreshDiagnostic(thread.id);
     bb.realtime.publish("approvals-changed", { threadId: thread.id });
     if (thread.parentThreadId) bb.realtime.publish("approvals-changed", { threadId: thread.parentThreadId });
   });
   bb.events.on("interaction.pending", ({ thread }) => {
+    snapshots.delete(`${thread.id}:interactions`);
     bb.realtime.publish("approvals-changed", { threadId: thread.id });
     if (thread.parentThreadId) bb.realtime.publish("approvals-changed", { threadId: thread.parentThreadId });
   });
@@ -371,15 +419,22 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
   bb.events.on("thread.failed", ({ thread }) => {
     reminderStates.delete(thread.id);
-    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId); // the strip turns red
+    invalidate(thread.id);
+    if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); } // the strip turns red
   });
   bb.events.on("thread.idle", ({ thread }) => {
-    void refreshAgents(thread.id);
-    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
+    invalidate(thread.id);
+    if (agentsByThread.has(thread.id)) void refreshAgents(thread.id);
+    if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("thread.deleted", ({ thread }) => {
-    if (thread.parentThreadId) void refreshAgents(thread.parentThreadId); // its strip goes
     agentsByThread.delete(thread.id);
+    invalidate(thread.id);
+    childSnapshots.delete(thread.id);
+    if (thread.parentThreadId) {
+      snapshots.delete(`${thread.parentThreadId}:children`); snapshots.delete(`${thread.parentThreadId}:agents`);
+      childSnapshots.delete(thread.parentThreadId); void refreshAgents(thread.parentThreadId);
+    }
     void bb.storage.kv.delete(`agent-errors:${thread.id}`);
     diagnostics.delete(thread.id);
     diagnosticCursors.delete(thread.id);
@@ -423,9 +478,17 @@ export default async function plugin(bb: BbPluginApi) {
       agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
     }),
     approvals_get: async ({ threadId }) => {
-      const children = await listChildren(threadId);
-      const lists = await Promise.all([threadId, ...children.map(child => child.id)].map(id => bb.sdk.threads.interactions.list({ threadId: id })));
-      return { count: lists.flat().filter(item => item.payload.kind === "approval" && item.status === "pending").length };
+      let incomplete = false;
+      const children = await listChildren(threadId).catch(() => { incomplete = true; return []; });
+      if (children.length >= 500) incomplete = true;
+      const lists = await Promise.allSettled([threadId, ...children.map(child => child.id)].map(id =>
+        cached(id, "interactions", () => bb.sdk.threads.interactions.list({ threadId: id }))));
+      let count = 0;
+      for (const list of lists) {
+        if (list.status === "rejected") { incomplete = true; continue; }
+        count += list.value.filter(item => item.payload.kind === "approval" && item.status === "pending").length;
+      }
+      return { count, incomplete };
     },
     // Retained for an already-open 0.3 frontend during a live update. Hide, never delete.
     bars_dismiss: ({ threadId, id }) =>

@@ -153,8 +153,10 @@ test('accepted human replies clear only older waits, never hidden messages or re
     const req = (seq, createdAt, input) => ({seq,createdAt,type:'client/turn/requested',data:{requestId:`r${seq}`,initiator:'user',senderThreadId:null,systemMessageKind:'unlabeled',input}});
     const accept = (seq, id, createdAt) => ({seq,createdAt,type:'turn/input/accepted',data:{clientRequestId:id}});
     events = [req(1,at+10,[{type:'text',visibility:'agent-only'}]),accept(2,'r1',at+11)];
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'thread-test'}});
     ({bars}=await h.callRpc('bars_get',{threadId:'thread-test'})); assert.equal(bars[0].state,'needs_input');
     events.push(req(3,at+20,[{type:'text'}]),accept(4,'r3',at+21));
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'thread-test'}});
     ({bars}=await h.callRpc('bars_get',{threadId:'thread-test'})); assert.equal(bars[0].state,'running');
     await new Promise(resolve => setTimeout(resolve, 30));
     await h.callAgentTool('plan_progress',{id:'wait',state:'needs_input'});
@@ -174,7 +176,10 @@ test('approval count includes only pending approvals of the thread and direct ch
   try {
     await plugin(bb);
     assert.equal((await h.callRpc('approvals_get',{threadId:'thread-test'})).count,1);
-    for (status of ['resolved','interrupted','resolving']) assert.equal((await h.callRpc('approvals_get',{threadId:'thread-test'})).count,0);
+    for (status of ['resolved','interrupted','resolving']) {
+      await h.emitThreadEvent('experimental_thread.events',{thread:{id:'child'}});
+      assert.equal((await h.callRpc('approvals_get',{threadId:'thread-test'})).count,0);
+    }
   } finally { await h.dispose(); }
 });
 
@@ -222,7 +227,7 @@ test('background completion events provide outcomes without inventing fields on 
   const row = {kind:'work',workKind:'delegation',callId:'launch',childRef:'task',background:true,status:'completed',startedAt:100,completedAt:110,description:'Task'};
   const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
     timeline:async()=>({rows:[row],activeBackgroundCommands:[]}), list:async()=>[],
-    events:{list:async ({types})=>types?.includes('item/backgroundTask/completed') ? [{seq:1,createdAt:500,type:'item/backgroundTask/completed',data:{item:{type:'backgroundTask',id:'task',taskType:'local_agent',taskStatus:outcome,description:'Task'}}}] : []},
+    events:{list:async ({types})=>types?.includes('item/backgroundTask/completed') ? [{seq:1,createdAt:outcome === 'failed' ? 500 : 1000,type:'item/backgroundTask/completed',data:{item:{type:'backgroundTask',id:'task',taskType:'local_agent',taskStatus:outcome,description:'Task'}}}] : []},
   }}});
   try {
     await plugin(bb);
@@ -246,4 +251,63 @@ test('the SDK timeline turn container keeps a completed native delegation in the
   try {await plugin(bb); const {agents}=await h.callRpc('agents_get',{threadId:'thread-test'});
     assert.equal(agents.length,1);assert.equal(agents[0].id,'native-call');assert.equal(agents[0].state,'done');
   } finally {await h.dispose();}
+});
+
+test('error trace survives an unknown intermediate snapshot and restart', async () => {
+  const launch={kind:'work',workKind:'delegation',callId:'call',childRef:'task',background:true,status:'completed',startedAt:100,completedAt:110,description:'Task'};
+  const failure={kind:'work',workKind:'workflow',itemId:'task',taskType:'local_agent',taskStatus:'failed',status:'error',description:'Task',startedAt:120,completedAt:900};
+  let rows=[launch,failure];
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{timeline:async()=>({rows,activeBackgroundCommands:[]}),list:async()=>[],events:{list:async()=>[]}}}});
+  try {
+    await plugin(bb); assert.equal((await h.callRpc('agents_get',{threadId:'thread-test'})).agents[0].state,'error');
+    rows=[launch]; let current=(await h.lifecycle.reload(plugin)).harness;
+    assert.equal((await current.callRpc('agents_get',{threadId:'thread-test'})).agents[0].state,'error');
+    rows=[]; current=(await current.lifecycle.reload(plugin)).harness;
+    assert.equal((await current.callRpc('agents_get',{threadId:'thread-test'})).agents[0].state,'error');
+  } finally {await h.dispose();}
+});
+
+test('stale progress cannot replace a newer workflow failure; aliases merge without launch', async () => {
+  const workflow={kind:'work',workKind:'workflow',itemId:'task',taskType:'local_agent',taskStatus:'failed',status:'error',description:'Task',startedAt:120,completedAt:900};
+  let timestamp=200, taskStatus='running';
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{timeline:async()=>({rows:[workflow],activeBackgroundCommands:[]}),list:async()=>[],
+    events:{list:async ({types})=>types.includes('item/backgroundTask/progress') ? [{seq:1,createdAt:timestamp,type:'item/backgroundTask/progress',data:{item:{type:'backgroundTask',id:'task',parentToolCallId:'call',taskType:'local_agent',taskStatus,description:'Task'}}}] : []}}}});
+  try {
+    await plugin(bb);let {agents}=await h.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(agents.length,1);assert.equal(agents[0].state,'error');assert.equal(agents[0].endedAt,900);
+    timestamp=1000;taskStatus='completed';const reload=(await h.lifecycle.reload(plugin)).harness;
+    ({agents}=await reload.callRpc('agents_get',{threadId:'thread-test'}));
+    assert.equal(agents.length,1);assert.equal(agents[0].state,'done');assert.equal(agents[0].endedAt,1000);
+  } finally {await h.dispose();}
+});
+
+test('unavailable child preserves known parent approval and marks coverage incomplete', async () => {
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{list:async()=>[{id:'child'}],
+    interactions:{list:async({threadId})=>{if(threadId==='child')throw Error('unavailable');return [{status:'pending',payload:{kind:'approval'}}];}}}}});
+  try {await plugin(bb);assert.deepEqual(await h.callRpc('approvals_get',{threadId:'thread-test'}),{count:1,incomplete:true});}
+  finally {await h.dispose();}
+});
+
+test('child event bursts reuse unchanged parent and child snapshots', async () => {
+  const count={timeline:0,list:0,events:0};
+  const children=Array.from({length:10},(_,i)=>({id:`child-${i}`,status:'idle',providerId:'codex',createdAt:1,updatedAt:2}));
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',settings:{automaticReminders:false},sdk:{threads:{
+    timeline:async()=>{count.timeline++;return {rows:[],activeBackgroundCommands:[]};},
+    list:async({parentThreadId})=>{count.list++;return parentThreadId==='parent'?children:[];},
+    events:{list:async()=>{count.events++;return [];}}
+  }}});
+  try {await plugin(bb);
+    for(const child of children){await h.emitThreadEvent('experimental_thread.events',{thread:{...child,parentThreadId:'parent'}});await new Promise(resolve=>setTimeout(resolve,20));}
+    assert.ok(count.timeline<=2,JSON.stringify(count));assert.ok(count.list<=2,JSON.stringify(count));assert.ok(count.events<=25,JSON.stringify(count));
+  } finally {await h.dispose();}
+});
+
+test('simultaneous agent reads share their in-flight SDK snapshot', async () => {
+  let reads=0;
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>{reads++;await new Promise(resolve=>setTimeout(resolve,15));return {rows:[],activeBackgroundCommands:[]};},
+    list:async()=>[],events:{list:async()=>[]},
+  }}});
+  try {await plugin(bb);await Promise.all(Array.from({length:8},()=>h.callRpc('agents_get',{threadId:'thread-test'})));assert.equal(reads,1);}
+  finally {await h.dispose();}
 });

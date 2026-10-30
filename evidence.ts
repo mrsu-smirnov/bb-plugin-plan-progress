@@ -41,8 +41,8 @@ export function latestChildRun(events: readonly EvidenceEvent[]): { state: 'done
 }
 
 /** Background task items carry the outcome; correlate only through a public item/tool ID. */
-export function backgroundEvidence(events: readonly EvidenceEvent[]): Map<string, { id: string; name: string; state: 'running' | 'done' | 'error' | 'unknown'; at: number; end: number | null }> {
-  const out = new Map<string, { id: string; name: string; state: 'running' | 'done' | 'error' | 'unknown'; at: number; end: number | null }>();
+export function backgroundEvidence(events: readonly EvidenceEvent[]): Map<string, { id: string; itemId: string; aliases: string[]; name: string; state: 'running' | 'done' | 'error' | 'unknown'; at: number; observedAt: number; end: number | null }> {
+  const out = new Map<string, { id: string; itemId: string; aliases: string[]; name: string; state: 'running' | 'done' | 'error' | 'unknown'; at: number; observedAt: number; end: number | null }>();
   const itemIds = new Map<string, string>();
   for (const event of [...events].sort((a,b) => a.seq-b.seq)) {
     const item = event.data?.item;
@@ -53,7 +53,7 @@ export function backgroundEvidence(events: readonly EvidenceEvent[]): Map<string
     const old = out.get(id);
     const previousItem = itemIds.get(id);
     itemIds.set(id, item.id);
-    out.set(id, { id, name: typeof item.description === 'string' ? item.description : 'Background agent', state,
+    out.set(id, { id, itemId: item.id, aliases: [item.id, id], observedAt: event.createdAt, name: typeof item.description === 'string' ? item.description : 'Background agent', state,
       at: previousItem === item.id ? (old?.at ?? event.createdAt) : event.createdAt, end: state === 'running' ? null : event.createdAt });
   }
   return out;

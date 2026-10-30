@@ -114,22 +114,22 @@ function useAgents(threadId: string | null): Agent[] {
   return agents;
 }
 
-function useApprovals(threadId: string | null): number {
+function useApprovals(threadId: string | null): { count: number; incomplete: boolean } {
   const rpc = useRpc<typeof rpcContract>();
-  const [loaded, setLoaded] = useState<{threadId: string; count: number} | null>(null);
+  const [loaded, setLoaded] = useState<{threadId: string; count: number; incomplete: boolean} | null>(null);
   const latest = useRef(0);
   const refetch = useCallback(() => {
     const ticket = ++latest.current;
     if (!threadId) return;
     void rpc.call("approvals_get", { threadId }).then(result => {
-      if (ticket === latest.current) setLoaded({ threadId, count: result.count });
-    }, () => { if (ticket === latest.current) setLoaded(null); });
+      if (ticket === latest.current) setLoaded({ threadId, count: result.count, incomplete: result.incomplete });
+    }, () => { if (ticket === latest.current) setLoaded(previous => previous?.threadId === threadId ? { ...previous, incomplete: true } : { threadId, count: 0, incomplete: true }); });
   }, [rpc, threadId]);
   useEffect(() => { refetch(); return () => { latest.current++; }; }, [refetch]);
   useRealtime("approvals-changed", payload => {
     if ((payload as {threadId?: unknown} | null)?.threadId === threadId) refetch();
   });
-  return loaded?.threadId === threadId ? loaded.count : 0;
+  return loaded?.threadId === threadId ? loaded : { count: 0, incomplete: true };
 }
 
 interface Options {
@@ -824,7 +824,7 @@ function Banner() {
     if (changed !== undefined) chime(changed.state);
   }, [bars, options.sounds, threadId]);
 
-  if (threadId === null || (bars.length === 0 && !warning && allAgents.length === 0 && approvals === 0)) return null;
+  if (threadId === null || (bars.length === 0 && !warning && allAgents.length === 0 && approvals.count === 0 && !approvals.incomplete)) return null;
   const visible = orderedPlans(bars.filter(bar => bar.hidden === undefined));
   const hidden = orderedPlans(bars.filter(bar => bar.hidden !== undefined));
   const shown = showAll ? visible : visible.slice(0, VISIBLE_PLANS);
@@ -846,8 +846,9 @@ function Banner() {
         {needsInput > 0 && <span style={{ color: STATE_COLOR.needs_input }}>{needsInput} {needsInput === 1 ? "needs" : "need"} your answer</span>}
         {errors > 0 && <span style={{ color: STATE_COLOR.error }}>{errors} {errors === 1 ? "error" : "errors"}</span>}
         {collapsed && hidden.length > 0 && <span>{hidden.length} hidden</span>}
+        {collapsed && allAgents.length > 0 && <span>Thread agents · {allAgents.length} · {allAgents.filter(a => a.state === "running").length} running · {allAgents.filter(a => a.state === "error").length} errors · {allAgents.filter(a => a.state === "unknown").length} unknown</span>}
       </button>
-      {approvals > 0 && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals} open approval {approvals === 1 ? "request" : "requests"} in this thread and its direct children</div>}
+      {(approvals.count > 0 || approvals.incomplete) && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals.count} open approval {approvals.count === 1 ? "request" : "requests"} in this thread and its direct children{approvals.incomplete ? " · some approvals could not be checked" : ""}</div>}
       {!collapsed && allAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
       {!collapsed && <div id={controls}>
         <div className="divide-y divide-border/60">
@@ -863,7 +864,7 @@ function Banner() {
             onClick={() => setView({ threadId, all: showAll, hidden: !showHidden })}>
             {showHidden ? "Hide list" : `Hidden plans (${hidden.length})`}
           </button>}
-          {visible.length === 0 && <span className="px-2 text-xs text-muted-foreground">All plans are hidden.</span>}
+          {visible.length === 0 && hidden.length > 0 && <span className="px-2 text-xs text-muted-foreground">All plans are hidden.</span>}
         </div>
         {showHidden && hidden.length > 0 && <div className="border-t border-border/60 px-3 py-2">
           <p className="mb-2 text-xs text-muted-foreground">Hidden plans keep updating. Hiding does not stop agents or delete chats.</p>

@@ -326,3 +326,51 @@ test('connected direct child goes idle while the parent stays collapsed across r
     assert.equal(slot.queryByText('Child task'),null);
   } finally {slot.unmount();await h.dispose();}
 });
+
+
+test('connected initial nonempty agent snapshot is cleared by a server empty update', async () => {
+  execFileSync('bb',['plugin','build'],{stdio:'pipe'});
+  const {createFakePluginHost}=await import('@get-bb/plugin-sdk/testing');
+  const {default:plugin}=await import('../../dist/server.js');
+  localStorage.clear();
+  let rows=[{kind:'work',workKind:'delegation',callId:'first',background:false,status:'pending',startedAt:Date.now(),completedAt:null,description:'Existing helper'}];
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows,activeBackgroundCommands:[]}),list:async()=>[],events:{list:async()=>[]},interactions:{list:async()=>[]},
+  }}});
+  await plugin(bb);
+  const slot=renderSlot(banner,{}, {context:{threadId:'root',projectId:null},settings:{autoClose:false,effects:false},
+    rpc:Object.fromEntries(['bars_get','agents_get','approvals_get','diagnostics_get'].map(name=>[name,args=>h.callRpc(name,args)]))});
+  try {
+    await slot.findByText('Existing helper');
+    rows=[];const start=h.realtimeSignals.length;
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'root'}});
+    await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(s=>s.channel==='agents-changed' && s.payload.agents.length===0)));
+    for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
+    await waitFor(()=>assert.equal(slot.queryByText('Existing helper'),null));
+  } finally {slot.unmount();await h.dispose();}
+});
+
+test('connected stale initial RPC cannot restore an agent after server empty update', async () => {
+  const {createFakePluginHost}=await import('@get-bb/plugin-sdk/testing');
+  const {default:plugin}=await import('../../dist/server.js');
+  localStorage.clear();
+  let rows=[{kind:'work',workKind:'delegation',callId:'old',background:false,status:'pending',startedAt:Date.now(),completedAt:null,description:'Old helper'}];
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows,activeBackgroundCommands:[]}),list:async()=>[],events:{list:async()=>[]},interactions:{list:async()=>[]},
+  }}});
+  await plugin(bb); let release; let captured;
+  const slot=renderSlot(banner,{}, {context:{threadId:'root',projectId:null},settings:{autoClose:false,effects:false},rpc:{
+    ...Object.fromEntries(['bars_get','approvals_get','diagnostics_get'].map(name=>[name,args=>h.callRpc(name,args)])),
+    agents_get:async args=>{captured=await h.callRpc('agents_get',args);return await new Promise(resolve=>{release=()=>resolve(captured);});},
+  }});
+  try {
+    await waitFor(()=>assert.equal(typeof release,'function'));
+    assert.equal(captured.agents[0].name,'Old helper');
+    rows=[];const start=h.realtimeSignals.length;
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'root'}});
+    await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(s=>s.channel==='agents-changed' && s.payload.agents.length===0)));
+    for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
+    await act(async()=>release());
+    assert.equal(slot.queryByText('Old helper'),null);
+  } finally {slot.unmount();await h.dispose();}
+});

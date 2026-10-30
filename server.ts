@@ -390,9 +390,8 @@ export default async function plugin(bb: BbPluginApi) {
         refreshing.set(threadId, false);
         const known = agentsByThread.get(threadId);
         const agents = await readAgents(threadId);
-        if (JSON.stringify(agents) === JSON.stringify(known ?? [])) continue;
-        if (agents.length === 0) agentsByThread.delete(threadId);
-        else agentsByThread.set(threadId, agents);
+        if (known !== undefined && JSON.stringify(agents) === JSON.stringify(known)) continue;
+        agentsByThread.set(threadId, agents);
         bb.realtime.publish(AGENTS_CHANGED, { threadId, agents });
       } while (refreshing.get(threadId) === true);
     } catch (error) {

@@ -128,10 +128,11 @@ with a limit of 100 per thread. Completed rows disappear after five seconds.
 Pending approvals in the current thread and direct child threads are counted
 without attributing them to an individual agent.
 
+Delegations in BB's `turn.children` groups are collected as a flat list.
 Delegation rows and background workflow items are matched through `childRef`
 and item IDs; normalized background task events supply confirmed outcomes.
-A launch or an absent active task is not proof of success. Child outcomes use
-the latest request and subsequent turn completion, never idle alone. The
+A launch or an absent active task is not proof of success. Child outcomes require the latest request to be accepted by a root turn and
+use that turn’s completion, never a native helper’s completion or idle alone. The
 child model is hidden during active work, and child duration is not displayed.
 Reads are bounded to 500 recent events and 500 direct children; the list is not
 an arbitrary ownership tree. Historical errors are retained once observed.

@@ -120,3 +120,13 @@ test('workflow outcomes use childRef, not callId equality', () => {
   assert.equal(agents.length,1); assert.equal(agents[0].id,'call'); assert.equal(agents[0].state,'error');
   assert.equal(agentsFromRows([workflow])[0].state,'error');
 });
+
+
+test('delegations inside BB turn children are collected without traversing agent childRows', () => {
+  const task = delegation({callId:'native-call',childRef:'provider-thread',background:false,status:'completed',completedAt:5000,
+    childRows:[delegation({callId:'nested-child'})]});
+  const agents = agentsFromRows([{kind:'turn',status:'completed',children:[{kind:'conversation'},task]}]);
+  assert.equal(agents.length,1); assert.equal(agents[0].id,'native-call'); assert.equal(agents[0].state,'done');
+  const running = agentsFromRows([{kind:'turn',children:[{...task,status:'pending',completedAt:null}]}]);
+  assert.equal(running[0].state,'running');
+});

@@ -12,14 +12,21 @@ test('only an accepted visible human request is an answer', () => {
     e(11,'client/turn/requested',request('unaccepted'))];
   assert.deepEqual(acceptedHumanRequests(events), [100]);
 });
-test('a new child request resets outcome and execution', () => {
-  const events = [e(1,'client/turn/requested',{execution:{model:'first'}}), e(2,'turn/completed',{status:'completed'}),
-    e(3,'client/turn/requested',{execution:{model:'second'}})];
-  assert.deepEqual(latestChildRun(events), {state:'running', execution:{model:'second'}, at:300});
-  events.push(e(4,'turn/completed',{status:'failed'}));
+test('only the root turn accepting the latest request can finish the child run', () => {
+  const turn = (seq,type,turnId,data={}) => ({...e(seq,type,data),scope:{kind:'turn',turnId}});
+  const events = [e(1,'client/turn/requested',{requestId:'req1',execution:{model:'first'}}),
+    turn(2,'turn/started','main'),turn(3,'turn/input/accepted','main',{clientRequestId:'req1'}),
+    turn(4,'turn/started','nested',{parentToolCallId:'delegate'}),turn(5,'turn/completed','nested',{status:'failed'})];
+  assert.equal(latestChildRun(events).state,'running');
+  events.push(turn(6,'turn/completed','main',{status:'completed'}));
+  assert.deepEqual(latestChildRun(events), {state:'done',execution:{model:'first'},at:100});
+  events.push(e(7,'client/turn/requested',{requestId:'req2',execution:{model:'second'}}),
+    turn(8,'turn/started','next'),turn(9,'turn/input/accepted','next',{clientRequestId:'req2'}));
+  assert.deepEqual(latestChildRun(events), {state:'running',execution:{model:'second'},at:700});
+  events.push(turn(10,'turn/completed','main',{status:'completed'}),turn(11,'turn/completed','next',{status:'failed'}));
   assert.equal(latestChildRun(events).state,'error');
-  events.push(e(5,'client/turn/requested',{}), e(6,'turn/completed',{status:'completed'}));
-  assert.deepEqual(latestChildRun(events), {state:'done',execution:null,at:500});
+  events.push(e(12,'client/turn/requested',{requestId:'req3'}),turn(13,'turn/completed','next',{status:'completed'}));
+  assert.deepEqual(latestChildRun(events), {state:'running',execution:null,at:1200});
 });
 test('background task item outcomes use stable IDs and never infer success from launch', () => {
   const item = {type:'backgroundTask', id:'task', parentToolCallId:'call', taskType:'local_agent', description:'Task'};

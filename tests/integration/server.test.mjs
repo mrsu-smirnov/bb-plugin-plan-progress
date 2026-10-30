@@ -197,8 +197,10 @@ test('failed workflow survives timeline eviction and plugin reload', async () =>
 
 test('direct child result follows the latest run without exposing the old model on restart', async () => {
   let status = 'idle';
-  let events = [{seq:1,createdAt:100,type:'client/turn/requested',data:{execution:{model:'old'}}},
-    {seq:2,createdAt:200,type:'turn/completed',data:{status:'completed'}}];
+  let events = [{seq:1,createdAt:100,type:'client/turn/requested',data:{requestId:'req',execution:{model:'old'}}},
+    {seq:2,createdAt:110,type:'turn/started',scope:{kind:'turn',turnId:'main'},data:{}},
+    {seq:3,createdAt:120,type:'turn/input/accepted',scope:{kind:'turn',turnId:'main'},data:{clientRequestId:'req'}},
+    {seq:4,createdAt:200,type:'turn/completed',scope:{kind:'turn',turnId:'main'},data:{status:'completed'}}];
   const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
     timeline:async()=>({rows:[],activeBackgroundCommands:[]}),
     list:async ({offset})=>offset ? [] : [{id:'child',title:'Child',providerId:'codex',status,createdAt:10,updatedAt:200}],
@@ -230,5 +232,18 @@ test('background completion events provide outcomes without inventing fields on 
     const reload = (await h.lifecycle.reload(plugin)).harness;
     result = await reload.callRpc('agents_get',{threadId:'thread-test'});
     assert.equal(result.agents.length,1); assert.equal(result.agents[0].state,'done');
+  } finally {await h.dispose();}
+});
+
+
+test('the SDK timeline turn container keeps a completed native delegation in the thread list', async () => {
+  const child = {kind:'work',workKind:'delegation',callId:'native-call',childRef:'provider-child',background:false,
+    status:'completed',startedAt:100,completedAt:200,description:'Inspect',childRows:[]};
+  const {bb,harness:h} = createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows:[{kind:'turn',status:'completed',children:[{kind:'conversation'},child]}],activeBackgroundCommands:[]}),
+    list:async()=>[],events:{list:async()=>[]},
+  }}});
+  try {await plugin(bb); const {agents}=await h.callRpc('agents_get',{threadId:'thread-test'});
+    assert.equal(agents.length,1);assert.equal(agents[0].id,'native-call');assert.equal(agents[0].state,'done');
   } finally {await h.dispose();}
 });

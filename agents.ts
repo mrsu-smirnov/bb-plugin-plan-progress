@@ -138,12 +138,29 @@ function toAgent(row: Row, running: Map<string, number>): Agent | null {
   };
 }
 
+/** Flatten BB's turn containers only. Delegation childRows describe its own work,
+ * not another top-level ownership tree. */
+export function flattenTurnRows(rows: readonly unknown[]): unknown[] {
+  const result: unknown[] = [];
+  const visit = (values: readonly unknown[]) => {
+    for (const value of values) {
+      if (!value || typeof value !== "object") continue;
+      const row = value as { kind?: unknown; children?: unknown };
+      if (row.kind === "turn" && Array.isArray(row.children)) visit(row.children);
+      else result.push(value);
+    }
+  };
+  visit(rows);
+  return result;
+}
+
 /**
  * Every delegation among the rows, oldest first. `active` is bb's list of
  * background work still going (the timeline's `activeBackgroundCommands`);
  * an agent there with no delegation row in sight gets a strip of its own.
  */
-export function agentsFromRows(rows: readonly unknown[], active: readonly unknown[] = []): Agent[] {
+export function agentsFromRows(input: readonly unknown[], active: readonly unknown[] = []): Agent[] {
+  const rows = flattenTurnRows(input);
   const running = new Map<string, number>();
   const orphans: Row[] = [];
   for (const item of [...active, ...rows.filter(value => value !== null && typeof value === "object" && (value as Row).kind === "work" && (value as Row).workKind === "workflow")]) {

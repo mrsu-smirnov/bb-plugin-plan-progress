@@ -1,5 +1,5 @@
 // Read-only reductions of BB's normalized event envelopes. No message text is retained.
-export interface EvidenceEvent { seq: number; createdAt: number; type: string; data: any }
+export interface EvidenceEvent { seq: number; createdAt: number; type: string; data: any; scope?: { kind: string; turnId?: string } }
 
 export function acceptedHumanRequests(events: readonly EvidenceEvent[]): number[] {
   const requests = new Map<string, number>();
@@ -19,16 +19,23 @@ export function acceptedHumanRequests(events: readonly EvidenceEvent[]): number[
   return accepted;
 }
 
-/** Outcome after the latest request, never inherited from an earlier run. */
+/** An outcome belongs to the last request only when BB confirms which root turn accepted it. */
 export function latestChildRun(events: readonly EvidenceEvent[]): { state: 'done' | 'error' | 'running' | 'unknown'; execution: any; at: number | null } {
-  let execution: any = null, at: number | null = null;
+  let execution: any = null, at: number | null = null, requestId: string | null = null, rootTurn: string | null = null;
   let state: 'done' | 'error' | 'running' | 'unknown' = 'unknown';
+  const rootTurns = new Set<string>();
   for (const event of [...events].sort((a,b) => a.seq - b.seq)) {
     const d = event.data ?? {};
-    if (event.type === 'client/turn/requested') { execution = d.execution ?? null; at = event.createdAt; state = 'running'; }
-    else if (at !== null && event.type === 'turn/completed') {
+    const turnId = event.scope?.kind === 'turn' && typeof event.scope.turnId === 'string' ? event.scope.turnId : null;
+    if (event.type === 'turn/started' && turnId && !d.parentToolCallId) rootTurns.add(turnId);
+    if (event.type === 'client/turn/requested') {
+      execution = d.execution ?? null; at = event.createdAt; requestId = typeof d.requestId === 'string' ? d.requestId : null;
+      rootTurn = null; state = 'running';
+    } else if (at !== null && event.type === 'turn/input/accepted' && requestId && d.clientRequestId === requestId && turnId && rootTurns.has(turnId)) {
+      rootTurn = turnId;
+    } else if (at !== null && rootTurn && turnId === rootTurn && event.type === 'turn/completed') {
       state = d.status === 'completed' ? 'done' : d.status === 'failed' ? 'error' : 'unknown';
-    } else if (at !== null && event.type === 'turn/mainRun/updated' && d.state === 'running') state = 'running';
+    } else if (at !== null && rootTurn && turnId === rootTurn && event.type === 'turn/mainRun/updated' && d.state === 'running') state = 'running';
   }
   return {state, execution, at};
 }

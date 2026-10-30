@@ -18,7 +18,7 @@ import {
   type Bar,
   type Op,
 } from "./engine";
-import { AGENTS_CHANGED, agentFromChild, agentsFromRows, type Agent, type ChildThread } from "./agents";
+import { AGENTS_CHANGED, agentFromChild, agentsFromRows, flattenTurnRows, type Agent, type ChildThread } from "./agents";
 import { acceptedHumanRequests, latestChildRun, backgroundEvidence, type EvidenceEvent } from "./evidence";
 import { hostContract } from "./host-contract";
 import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
@@ -295,8 +295,11 @@ export default async function plugin(bb: BbPluginApi) {
     const own = agentsFromRows(timeline.rows, timeline.activeBackgroundCommands);
     const evidence = backgroundEvidence(events);
     for (const [id, result] of evidence) {
-      const launch = timeline.rows.find(row => row.kind === "work" && row.workKind === "delegation" && row.childRef === id);
-      const agent = own.find(a => a.id === id || (launch?.kind === "work" && launch.workKind === "delegation" && a.id === launch.callId));
+      const launch = flattenTurnRows(timeline.rows).find(value => {
+        const row = value as {kind?: string; workKind?: string; childRef?: string};
+        return row.kind === "work" && row.workKind === "delegation" && row.childRef === id;
+      }) as {callId?: string} | undefined;
+      const agent = own.find(a => a.id === id || a.id === launch?.callId);
       if (agent && result.at >= agent.startedAt) { agent.state = result.state; agent.endedAt = result.end; if (agent.state !== "running") agent.tool = null; }
       else if (!agent) own.push({ id, name: result.name, kind: "background agent", model: null, state: result.state,
         tool: null, startedAt: result.at, endedAt: result.end });
@@ -316,7 +319,7 @@ export default async function plugin(bb: BbPluginApi) {
     const children = await listChildren(threadId);
     return Promise.all(children.map(async child => {
       try {
-        const events = await recentEvents(child.id, ["client/turn/requested", "turn/completed", "turn/mainRun/updated"]);
+        const events = await recentEvents(child.id, ["client/turn/requested", "turn/started", "turn/input/accepted", "turn/completed", "turn/mainRun/updated"]);
         const run = latestChildRun(events);
         const agent = agentFromChild(child, child.status === "idle" && (run.state === "done" || run.state === "error") ? run.execution : null);
         if (child.status === "idle" && run.state !== "running") agent.state = run.state;

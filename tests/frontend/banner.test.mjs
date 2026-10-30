@@ -289,3 +289,40 @@ test('connected server pushes empty to running, completion, empty and a later he
     rows=[row('third','Third helper','pending',at+6)];await push();await slot.findByText('Third helper');
   } finally {slot.unmount();await h.dispose();}
 });
+
+test('connected direct child goes idle while the parent stays collapsed across remount', async () => {
+  execFileSync('bb',['plugin','build'],{stdio:'pipe'});
+  const {createFakePluginHost}=await import('@get-bb/plugin-sdk/testing');
+  const {default:plugin}=await import('../../dist/server.js');
+  localStorage.clear();
+  const now=Date.now();
+  const child={id:'child',title:'Child task',providerId:'codex',status:'active',createdAt:now-100,updatedAt:now};
+  const events=[
+    {seq:1,createdAt:now-50,type:'client/turn/requested',data:{requestId:'req',execution:{model:'fixture'}}},
+    {seq:2,createdAt:now-40,type:'turn/started',scope:{kind:'turn',turnId:'main'},data:{}},
+    {seq:3,createdAt:now-30,type:'turn/input/accepted',scope:{kind:'turn',turnId:'main'},data:{clientRequestId:'req'}},
+    {seq:4,createdAt:now-10,type:'turn/completed',scope:{kind:'turn',turnId:'main'},data:{status:'completed'}},
+  ];
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>({rows:[],activeBackgroundCommands:[]}), list:async({parentThreadId})=>parentThreadId==='parent'?[child]:[],
+    events:{list:async({threadId,types})=>threadId==='child'?events.filter(e=>types?.includes(e.type)):[]}, interactions:{list:async()=>[]},
+  }}});
+  await plugin(bb);
+  const mountConnected=()=>renderSlot(banner,{}, {context:{threadId:'parent',projectId:null},settings:{autoClose:false,effects:false},
+    rpc:Object.fromEntries(['bars_get','agents_get','approvals_get','diagnostics_get'].map(name=>[name,args=>h.callRpc(name,args)]))});
+  let slot=mountConnected();
+  try {
+    await slot.findByText('Child task');
+    fireEvent.click(slot.getByRole('button',{name:/Progress · 0/}));
+    assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/1 running/);
+    slot.unmount(); slot=mountConnected();
+    await waitFor(()=>assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/1 running/));
+    assert.equal(slot.queryByText('Child task'),null);
+    const start=h.realtimeSignals.length;
+    await h.emitThreadEvent('thread.idle',{thread:{...child,status:'idle',updatedAt:now+1,parentThreadId:'parent'}});
+    await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(signal=>signal.channel==='agents-changed' && signal.payload.threadId==='parent')));
+    for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
+    await waitFor(()=>assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/0 running/));
+    assert.equal(slot.queryByText('Child task'),null);
+  } finally {slot.unmount();await h.dispose();}
+});

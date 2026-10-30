@@ -70,7 +70,7 @@ test("a background agent runs while bb lists it as active", () => {
     background: true,
     childRows: [{ kind: "work", workKind: "file-read", status: "pending", startedAt: 1200 }],
   });
-  const active = [{ taskType: "local_agent", description: "Разбор плана", startedAt: 1050, itemId: "t1" }];
+  const active = [{ taskType: "local_agent", description: "Разбор плана", startedAt: 1050, itemId: "bg" }];
   const [running] = agentsFromRows([launched], active);
   assert.equal(running.state, "running");
   assert.equal(running.tool, "Read");
@@ -84,8 +84,13 @@ test("a background agent runs while bb lists it as active", () => {
     childRows: [{ kind: "work", workKind: "tool", toolName: "SubagentHandback", status: "completed", startedAt: 8000, completedAt: 9000 }],
   });
   const [done] = agentsFromRows([finished], []);
-  assert.equal(done.state, "done");
-  assert.equal(done.endedAt, 9000);
+  assert.equal(done.state, "unknown");
+  assert.equal(done.endedAt, null);
+  const [confirmed] = agentsFromRows([{ ...finished, taskStatus: "completed" }], []);
+  assert.equal(confirmed.state, "done");
+  const [failed] = agentsFromRows([{ ...finished, taskStatus: "failed" }], []);
+  assert.equal(failed.state, "error");
+  assert.equal(visibleAgents([failed], 9999999, 5000).length, 1);
 });
 
 test("an active background agent without its launch row still gets a strip", () => {
@@ -97,15 +102,15 @@ test("an active background agent without its launch row still gets a strip", () 
 test("a child thread on another provider becomes a strip with provider and model", () => {
   const thread = { id: "thr_1", title: "Демо: Codex", providerId: "codex", status: "idle", createdAt: 1000, updatedAt: 5000 };
   assert.deepEqual(agentFromChild(thread, { model: "gpt-6.1-terra", reasoningLevel: "medium" }), {
-    id: "thr_1", name: "Демо: Codex", kind: "Codex", model: "Codex · gpt-6.1-terra · medium",
-    state: "done", tool: null, startedAt: 1000, endedAt: 5000, threadId: "thr_1",
+    id: "thr_1", name: "Демо: Codex", kind: "Codex", model: "gpt-6.1-terra · medium",
+    state: "unknown", tool: null, startedAt: 1000, endedAt: 5000, threadId: "thr_1",
   });
   assert.equal(agentFromChild({ ...thread, status: "active" }, null).state, "running");
   assert.equal(agentFromChild({ ...thread, status: "error" }, null).state, "error");
   assert.equal(agentFromChild({ ...thread, status: "starting" }, null).state, "running");
-  assert.equal(agentFromChild({ ...thread, status: "error" }, null).model, "Codex");
+  assert.equal(agentFromChild({ ...thread, status: "error" }, null).model, null);
   assert.equal(
     agentFromChild({ ...thread, providerId: "pi" }, { model: "openrouter/anthropic/claude-haiku-5.5" }).model,
-    "Pi · claude-haiku-5.5",
+    "claude-haiku-5.5",
   );
 });

@@ -26,7 +26,7 @@ Ops:
 - `{id, done:["A"], active:"B"}` — mark done, pick current; steps *active* before B count as done, pending and error ones stay
 - `{id, done:["A"]}` on the active step moves on to the step after it, as `next` does
 - `{id, failed:"B", note}` — the step gets an error and the bar turns red; the next `next` closes it
-- `{id, state:"needs_input", note}` — before asking the user; the user's answer turns it back to running
+- `{id, state:"needs_input", note}` — before asking the user; use an explicit subsequent op to resume after the answer
 - `{id, state:"done"}` — finish
 
 States are those of the original: `running`, `needs_input`, `error`, `done`
@@ -80,9 +80,12 @@ Inside a thread (or with `--thread <id>`):
 
 ## Subagent strips
 
-Under the bar being worked on, one strip per subagent the main agent started:
-its description, model, the tool it is in, and its time. They come from bb's
-timeline, cost no tokens, and fold away 5 s after the agent ends (2 min after an error).
+The separate Thread agents block shows observed latest-segment delegations and
+direct child threads, even without a plan. Three rows are shown by default;
+expansion is saved per browser and thread. Confirmed errors and unknown outcomes
+remain visible while present in the source. Open approvals in the current
+thread are counted without assigning them to an agent. Provider event sequences
+and automatic detection of confirmed human replies still need live validation.
 
 ## Coexistence with Claude Desktop
 

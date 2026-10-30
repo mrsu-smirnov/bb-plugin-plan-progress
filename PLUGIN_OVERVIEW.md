@@ -1,8 +1,8 @@
 ## What you get
 
 - A bar above the thread's message box for each task the agent plans: stages as capsules, steps as dots, and a pill at the head naming the current stage and step. Hover the bar to see how long the task has run; hover a mark to see its step and how long it took.
-- Four states with their own colours: working, needs your answer, error, done. On a question or an error the pill shows the agent's note, and your reply turns the bar back to working.
-- A row for each subagent under the bar: its description, model, the tool it is in right now, and its time. Background subagents count too. Finished rows fold away after a few seconds.
+- Four states with their own colours: working, needs your answer, error, done. On a question or an error the pill shows the agent's note, and a subsequent explicit plan operation changes the state.
+- A compact thread-level list of observed delegations and direct child threads, independent of plans. Unknown outcomes are labelled; errors remain visible. Open approval requests in the current thread appear separately.
 - Click Progress to fold or show the whole block. It remembers your choice for this thread in this browser. Questions and errors remain visible as counts in the summary.
 - Three plans are shown at a time, questions and errors first; Show all opens the rest. The layout adapts to narrow screens.
 - The arrow beside the percent opens the step list. Use … → Hide plan to hide one safely; Hidden plans → Restore brings it back. Hidden plans keep updating; a new question or error brings them back to attention.
@@ -28,4 +28,6 @@ A port of [plan-progress](https://github.com/zycck/claude-mods) by zycck, a mod 
 
 ## Requirements
 
-bb 0.47 or later. The bar sits in an experimental part of the bb plugin API and may need an update after a bb release. Agent tools reach a thread when its session starts: open a new thread after installing.
+bb 0.48.1 or later. The bar sits in an experimental part of the bb plugin API and may need an update after a bb release. Agent tools reach a thread when its session starts: open a new thread after installing.
+
+Current limitations: automatic clearing after a confirmed human answer, provider-specific live event validation, historical timeline pagination and child approval attribution are not yet complete.

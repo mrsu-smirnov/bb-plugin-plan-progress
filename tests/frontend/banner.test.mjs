@@ -31,11 +31,12 @@ function fixture() {
   });
 }
 
-function mount(getBars, change = () => {}, settings = { autoClose: false, effects: false }) {
+function mount(getBars, change = () => {}, settings = { autoClose: false, effects: false }, getAgents = () => [], getApprovals = () => 0) {
   return renderSlot(banner, {}, { context: { threadId: 'fixture-thread', projectId: null },
     settings, rpc: {
       bars_get: () => ({ bars: getBars() }),
-      agents_get: () => ({ agents: [] }),
+      agents_get: () => ({ agents: getAgents() }),
+      approvals_get: () => ({ count: getApprovals() }),
       diagnostics_get: () => ({ diagnostic: { source: 'bb', warning: null, lastCallSeq: 0 } }),
       bars_setVisibility: args => { change(args); return { changed: true }; },
     } });
@@ -117,5 +118,59 @@ test('auto-hide is on by default and a restored finish stays visible', async () 
     await slot.emitRealtime('bars-changed', { threadId: 'fixture-thread' });
     await waitFor(() => assert.equal(slot.getAllByRole('progressbar').length, 1));
     assert.equal(calls.length, 2);
+  } finally { slot.unmount(); }
+});
+
+
+test('thread agents remain independent of plan visibility and preserve expansion', async () => {
+  for (const planCount of [0, 1, 9]) for (const agentCount of [0, 1, 3, 10]) {
+    localStorage.clear();
+    const bars = fixture().slice(0, planCount).map((bar, i) => i === planCount - 1 ? setVisibility(bar, true) : bar);
+    const agents = Array.from({length: agentCount}, (_, i) => ({ id: `agent-${i}`, name: `Task ${i}`, kind: null,
+      model: null, state: 'running', tool: null, startedAt: Date.now(), endedAt: null }));
+    let slot = mount(() => bars, undefined, undefined, () => agents);
+    try {
+      if (!agentCount) { await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(slot.queryByLabelText('Thread agents'), null); continue; }
+      await slot.findByLabelText('Thread agents');
+      assert.equal(slot.queryAllByText(/^Task /).length, Math.min(agentCount, 3));
+      if (agentCount === 10) {
+        if (planCount === 9 && process.env.PLAN_PROGRESS_PREVIEW_DIR) {
+          const css = await readFile('dist/app.css', 'utf8');
+          await writeFile(`${process.env.PLAN_PROGRESS_PREVIEW_DIR}/agents.html`, `<!doctype html><html class="dark"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}
+            :root {--color-foreground:#eee;--color-muted-foreground:#aaa;--color-muted:#303030;--color-border:#454545}
+            body {margin:0;background:#171717;color:#eee;font:14px system-ui;padding:16px} button {background:transparent;color:inherit;border:0;cursor:pointer} main {max-width:760px;margin:auto}</style><main data-bb-plugin="plan-progress">${slot.container.innerHTML}</main></html>`);
+        }
+        fireEvent.click(slot.getByRole('button', {name: /Thread agents/}));
+        assert.equal(slot.queryAllByText(/^Task /).length, 10);
+        if (planCount) fireEvent.click(slot.getByRole('button', {name: /Progress/}));
+        await slot.emitRealtime('agents-changed', {threadId: 'fixture-thread', agents});
+        assert.equal(slot.queryAllByText(/^Task /).length, 10);
+        slot.unmount(); slot = mount(() => bars, undefined, undefined, () => agents);
+        await slot.findByLabelText('Thread agents');
+        assert.equal(slot.queryAllByText(/^Task /).length, 10);
+      }
+    } finally { slot.unmount(); }
+  }
+});
+
+test('skipped steps agree in text, fill and ARIA while waiting', async () => {
+  localStorage.clear();
+  let bar = applyOp([], {id:'skipped', title:'Skipped', steps:[{title:'A',status:'skipped'},{title:'B'}], state:'needs_input'}, 1000).bar;
+  const slot = mount(() => [bar]);
+  try {
+    const track = await slot.findByRole('progressbar');
+    assert.equal(track.getAttribute('aria-valuenow'), '50');
+    assert.equal(parseFloat(track.querySelector('.pp-glide').style.width), 50);
+    assert.ok(slot.getByText('50%'));
+  } finally { slot.unmount(); }
+});
+
+test('open approval count refreshes independently of plans', async () => {
+  localStorage.clear(); let count = 1;
+  const slot = mount(() => [], undefined, undefined, () => [], () => count);
+  try {
+    await slot.findByText('1 open approval request in this thread');
+    count = 0; await slot.emitRealtime('approvals-changed', {threadId:'fixture-thread'});
+    await waitFor(() => assert.equal(slot.queryByRole('status'), null));
   } finally { slot.unmount(); }
 });

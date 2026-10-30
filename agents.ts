@@ -5,7 +5,7 @@
 /** Realtime channel: payload `{ threadId, agents }` when a thread's agents change. */
 export const AGENTS_CHANGED = "agents-changed";
 
-export type AgentState = "running" | "done" | "error";
+export type AgentState = "running" | "done" | "error" | "unknown";
 
 export interface Agent {
   id: string;
@@ -114,13 +114,20 @@ function toAgent(row: Row, running: Map<string, number>): Agent | null {
   let state = stateOf(row.status);
   let endedAt = state === "running" ? null : time(row.completedAt);
   if (row.background === true) {
-    const left = running.get(name) ?? 0;
+    const key = text(row.itemId) ?? id;
+    const left = running.get(key) ?? 0;
     if (left > 0) {
-      running.set(name, left - 1);
+      running.set(key, left - 1);
       state = "running";
       endedAt = null;
-    } else if (state === "done") {
+    } else if (row.taskStatus === "completed") {
+      state = "done";
       endedAt = lastActivity(row) ?? endedAt;
+    } else if (row.taskStatus === "failed") {
+      state = "error";
+    } else if (state === "done") {
+      state = "unknown";
+      endedAt = null;
     }
   }
   return {
@@ -148,7 +155,8 @@ export function agentsFromRows(rows: readonly unknown[], active: readonly unknow
     const task = item as Row;
     const description = text(task.description) ?? text(task.presentation?.title);
     if (task.taskType !== "local_agent" || description === null) continue;
-    running.set(description, (running.get(description) ?? 0) + 1);
+    const id = text(task.itemId) ?? text(task.id);
+    if (id !== null) running.set(id, (running.get(id) ?? 0) + 1);
     orphans.push(task);
   }
   const found: Agent[] = [];
@@ -161,10 +169,11 @@ export function agentsFromRows(rows: readonly unknown[], active: readonly unknow
   }
   for (const task of orphans) {
     const description = text(task.description) ?? text(task.presentation?.title)!;
-    const left = running.get(description) ?? 0;
+    const key = text(task.itemId) ?? text(task.id);
+    const left = key === null ? 1 : (running.get(key) ?? 0);
     const startedAt = time(task.startedAt);
     if (left === 0 || startedAt === null) continue;
-    running.set(description, left - 1);
+    if (key !== null) running.set(key, left - 1);
     found.push({
       id: text(task.itemId) ?? text(task.id) ?? description,
       name: description,
@@ -182,8 +191,8 @@ export function agentsFromRows(rows: readonly unknown[], active: readonly unknow
 /** The agents worth a strip: running ones, and finished ones for `keepMs` after they ended (an error 24 times that). */
 export function visibleAgents(agents: readonly Agent[], now: number, keepMs: number): Agent[] {
   return agents.filter((agent) => {
-    if (agent.state === "running") return true;
-    const keep = agent.state === "error" ? keepMs * 24 : keepMs;
+    if (agent.state === "running" || agent.state === "error" || agent.state === "unknown") return true;
+    const keep = keepMs;
     return now - (agent.endedAt ?? agent.startedAt) < keep;
   });
 }
@@ -206,14 +215,14 @@ export function agentFromChild(thread: ChildThread, execution: { model?: unknown
   const provider = PROVIDERS[thread.providerId] ?? thread.providerId;
   // "openrouter/anthropic/claude-haiku-5.5" is long for a strip: keep the model's own name
   const model = text(execution?.model)?.split("/").pop() ?? null;
-  const parts = [provider, model, text(execution?.reasoningLevel)];
+  const parts = [model, text(execution?.reasoningLevel)];
   const state: AgentState =
-    thread.status === "error" ? "error" : thread.status === "idle" ? "done" : "running";
+    thread.status === "error" ? "error" : thread.status === "idle" ? "unknown" : "running";
   return {
     id: thread.id,
     name: text(thread.title) ?? text(thread.titleFallback) ?? "Thread",
     kind: provider,
-    model: parts.filter((part): part is string => part !== null).join(" · "),
+    model: parts.filter((part): part is string => part !== null).join(" · ") || null,
     state,
     tool: null,
     startedAt: thread.createdAt,

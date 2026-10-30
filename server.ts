@@ -7,7 +7,6 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   allSteps,
-  answered,
   applyOp,
   BARS_CHANGED,
   describe,
@@ -38,6 +37,10 @@ export const rpcContract = defineRpcContract({
   agents_get: {
     input: z.object({ threadId: z.string().min(1) }),
     output: z.object({ agents: z.array(z.custom<Agent>()) }),
+  },
+  approvals_get: {
+    input: z.object({ threadId: z.string().min(1) }),
+    output: z.object({ count: z.number() }),
   },
   bars_dismiss: {
     input: z.object({ threadId: z.string().min(1), id: z.string().min(1) }),
@@ -83,7 +86,7 @@ const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress t
 - If the BB tool is missing or fails, use the same operation with bb plan-progress op '<json>' in the current thread. If that also fails, report the failure; do not silently use the Desktop plugin.
 - A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]}. 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
-- Before asking the user a question: {id, state:"needs_input", note}; the user's answer clears it. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
+- Before asking the user a question: {id, state:"needs_input", note}; after the answer, send an explicit op to resume. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
 - When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.
 - The result already says done/total, state and the active step; do not call it just to check.
@@ -250,22 +253,24 @@ export default async function plugin(bb: BbPluginApi) {
     return [...own, ...(await readChildren(threadId))].sort((a, b) => a.startedAt - b.startedAt);
   }
   // Threads this one started on other providers (`bb thread spawn --parent-self`).
-  // The model is in the child's first request; it never changes, so keep it.
+  // Read the latest request for the current model; never reuse the first run.
   const childModels = new Map<string, { model?: unknown; reasoningLevel?: unknown }>();
   async function readChildren(threadId: string): Promise<Agent[]> {
     const children = (await bb.sdk.threads.list({ parentThreadId: threadId })) as unknown as ChildThread[];
     return Promise.all(
       children.map(async (child) => {
-        // A model not found yet (the first request is not written) is not kept: ask again next time.
+        // A missing request does not inherit a previous run's model.
         // One child that cannot be read never takes the other strips down with it.
-        if (!childModels.has(child.id)) {
+        {
           try {
             const [first] = await bb.sdk.threads.events.list({
-              threadId: child.id, types: ["client/turn/requested"], limit: "1", order: "asc" as const,
+              threadId: child.id, types: ["client/turn/requested"], limit: "1", order: "desc" as const,
             });
             const data = first as unknown as { data?: { execution?: { model?: unknown; reasoningLevel?: unknown } } } | undefined;
+            childModels.delete(child.id);
             if (data?.data?.execution) childModels.set(child.id, data.data.execution);
           } catch (error) {
+            childModels.delete(child.id);
             bb.log.warn(`child model read failed for ${child.id}: ${String(error)}`);
           }
         }
@@ -283,7 +288,6 @@ export default async function plugin(bb: BbPluginApi) {
       do {
         refreshing.set(threadId, false);
         const known = agentsByThread.get(threadId);
-        if (known === undefined && (await readBars(threadId)).length === 0) return;
         const agents = await readAgents(threadId);
         if (JSON.stringify(agents) === JSON.stringify(known ?? [])) continue;
         if (agents.length === 0) agentsByThread.delete(threadId);
@@ -300,7 +304,11 @@ export default async function plugin(bb: BbPluginApi) {
     void refreshAgents(thread.id);
     if (thread.parentThreadId) void refreshAgents(thread.parentThreadId);
   });
-  bb.events.on("experimental_thread.events", ({ thread }) => void refreshDiagnostic(thread.id));
+  bb.events.on("experimental_thread.events", ({ thread }) => {
+    void refreshDiagnostic(thread.id);
+    bb.realtime.publish("approvals-changed", { threadId: thread.id });
+  });
+  bb.events.on("interaction.pending", ({ thread }) => bb.realtime.publish("approvals-changed", { threadId: thread.id }));
   bb.events.on("thread.idle", ({ thread }) => void refreshDiagnostic(thread.id));
   bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
   bb.events.on("thread.failed", ({ thread }) => {
@@ -320,13 +328,10 @@ export default async function plugin(bb: BbPluginApi) {
     reminderStates.delete(thread.id);
     void serial(thread.id, () => writeBars(thread.id, []));
   });
-  // the person answered: a bar waiting on them goes back to work, without a model call
+  // Activation alone does not establish that a human answered.
   bb.events.on("thread.active", ({ thread }) => {
     reminderStates.set(thread.id, newReminderState(Date.now()));
-    return serial(thread.id, async () => {
-      const bars = answered(await readBars(thread.id), Date.now());
-      if (bars !== null) await writeBars(thread.id, bars);
-    });
+
   });
 
   bb.agents.registerTool({
@@ -358,6 +363,9 @@ export default async function plugin(bb: BbPluginApi) {
     bars_get: async ({ threadId }) => ({ bars: await readBars(threadId) }),
     agents_get: async ({ threadId }) => ({
       agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
+    }),
+    approvals_get: async ({ threadId }) => ({
+      count: (await bb.sdk.threads.interactions.list({ threadId })).filter(item => item.payload.kind === "approval").length,
     }),
     // Retained for an already-open 0.3 frontend during a live update. Hide, never delete.
     bars_dismiss: ({ threadId, id }) =>

@@ -140,8 +140,7 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
   const finish = (step: Step) => {
     if (isFinished(step.status)) return;
     step.status = "done";
-    step.startedAt ??= now;
-    step.endedAt = now;
+    if (step.startedAt !== undefined) step.endedAt = now;
   };
   const reopen = (step: Step, to: StepStatus) => {
     step.status = to;

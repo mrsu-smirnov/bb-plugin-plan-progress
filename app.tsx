@@ -92,13 +92,15 @@ function useBars(threadId: string | null): Bar[] {
 /** The subagents of the thread's latest turn, pushed by the server as they change. */
 function useAgents(threadId: string | null): Agent[] {
   const rpc = useRpc<typeof rpcContract>();
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loaded, setLoaded] = useState<{threadId: string; agents: Agent[]} | null>(null);
+  const agents = loaded?.threadId === threadId ? loaded.agents : [];
+  const agentVersion = useRef(0);
   useEffect(() => {
-    setAgents([]);
     if (threadId === null) return;
     let live = true;
+    const ticket = ++agentVersion.current;
     rpc.call("agents_get", { threadId }).then(
-      (result) => live && setAgents(result.agents),
+      (result) => live && ticket === agentVersion.current && setLoaded({ threadId, agents: result.agents }),
       () => undefined,
     );
     return () => {
@@ -107,9 +109,27 @@ function useAgents(threadId: string | null): Agent[] {
   }, [rpc, threadId]);
   useRealtime(AGENTS_CHANGED, (payload) => {
     const update = payload as { threadId?: unknown; agents?: unknown } | null;
-    if (update?.threadId === threadId && Array.isArray(update.agents)) setAgents(update.agents as Agent[]);
+    if (update?.threadId === threadId && Array.isArray(update.agents)) { agentVersion.current++; if (threadId) setLoaded({ threadId, agents: update.agents as Agent[] }); }
   });
   return agents;
+}
+
+function useApprovals(threadId: string | null): number {
+  const rpc = useRpc<typeof rpcContract>();
+  const [loaded, setLoaded] = useState<{threadId: string; count: number} | null>(null);
+  const latest = useRef(0);
+  const refetch = useCallback(() => {
+    const ticket = ++latest.current;
+    if (!threadId) return;
+    void rpc.call("approvals_get", { threadId }).then(result => {
+      if (ticket === latest.current) setLoaded({ threadId, count: result.count });
+    }, () => { if (ticket === latest.current) setLoaded(null); });
+  }, [rpc, threadId]);
+  useEffect(() => { refetch(); return () => { latest.current++; }; }, [refetch]);
+  useRealtime("approvals-changed", payload => {
+    if ((payload as {threadId?: unknown} | null)?.threadId === threadId) refetch();
+  });
+  return loaded?.threadId === threadId ? loaded.count : 0;
 }
 
 interface Options {
@@ -226,7 +246,7 @@ const STYLE = `
 .pp-track:hover .pp-label { display: none; }
 .pp-mark .pp-tip { opacity: 0; transition: opacity .12s; pointer-events: none; }
 .pp-mark:hover .pp-tip { opacity: 1; }
-@media (prefers-reduced-motion: reduce) { .pp-wave, .pp-blink { animation: none; } .pp-glide { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .pp-wave, .pp-blink, .animate-pulse { animation: none; } .pp-glide { transition: none; } }
 `;
 
 function mask(image: string, extra: CSSProperties = {}): CSSProperties {
@@ -293,14 +313,14 @@ const ICON_PATH: Partial<Record<BarState, string>> = {
 function head(bar: Bar) {
   const steps = allSteps(bar);
   const total = steps.length;
-  const done = steps.filter((step) => step.status === "done").length;
+  const done = steps.filter((step) => step.status === "done" || step.status === "skipped").length;
   let index = steps.findIndex((step) => step.status === "active" || step.status === "error");
   if (index === -1) index = steps.findIndex((step) => step.status === "pending");
   let start = 0;
   let stage = bar.stages.length - 1;
   for (let i = 0; i < bar.stages.length; i++) {
     const size = bar.stages[i]!.steps.length;
-    if (index < start + size) {
+    if (index >= 0 && index < start + size) {
       stage = i;
       break;
     }
@@ -331,7 +351,12 @@ function marks(bar: Bar, fill: number): MarkInfo[] {
         const ended: Step | undefined = isStage ? before?.steps.at(-1) : stage.steps[j - 1];
         // a passed mark names what ended there and how long it took; one ahead names what starts there
         let label = passed ? (isStage ? (before?.name ?? "") : (ended?.title ?? "")) : isStage ? stage.name : step.title;
-        if (passed && ended?.startedAt !== undefined && ended.endedAt !== undefined) {
+        if (passed && isStage && before) {
+          // Wall-clock span of observed activity in the stage, including gaps/overlap.
+          const starts = before.steps.flatMap(s => s.startedAt === undefined ? [] : [s.startedAt]);
+          const ends = before.steps.flatMap(s => s.endedAt === undefined ? [] : [s.endedAt]);
+          if (starts.length && ends.length) label += ` · ${elapsed(Math.max(...ends) - Math.min(...starts))}`;
+        } else if (passed && ended?.startedAt !== undefined && ended.endedAt !== undefined) {
           label += ` · ${elapsed(ended.endedAt - ended.startedAt)}`;
         }
         list.push({ at, isStage, passed, label: label || step.title });
@@ -512,8 +537,9 @@ const AGENT_COLOR: Record<AgentState, string> = {
   running: STATE_COLOR.running,
   done: STATE_COLOR.done,
   error: STATE_COLOR.error,
+  unknown: "#716b60",
 };
-const AGENT_WORD: Record<AgentState, string> = { running: "#9C85D8", done: "#4FA569", error: "#D67278" };
+const AGENT_WORD: Record<AgentState, string> = { running: "#9C85D8", done: "#4FA569", error: "#D67278", unknown: "#716b60" };
 
 function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effects: boolean }) {
   const navigate = useBbNavigate();
@@ -521,7 +547,7 @@ function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effect
   const color = AGENT_COLOR[agent.state];
   const running = agent.state === "running";
   const light = mix(hex(color), WHITE, 0.32);
-  const word = running ? agent.tool : agent.state === "done" ? "Done" : "Error";
+  const word = running ? agent.tool : agent.state === "done" ? "Done" : agent.state === "error" ? "Error" : "Unknown";
   const model = agent.model ?? agent.kind;
   return (
     <div
@@ -571,16 +597,16 @@ function AgentStrip({ agent, now, effects }: { agent: Agent; now: number; effect
       />
       <span className="relative min-w-0 flex-1 truncate">
         <span className="font-medium text-foreground">{agent.name}</span>
-        {model === null ? null : <span className="text-muted-foreground"> ({model})</span>}
+        {model === null ? null : <span className="hidden text-muted-foreground sm:inline"> ({model})</span>}
       </span>
       {word === null ? null : (
         <span className="relative max-w-[25%] shrink-0 truncate" style={{ color: AGENT_WORD[agent.state] }}>
           {word}
         </span>
       )}
-      <span className="relative shrink-0 font-medium tabular-nums text-muted-foreground">
+      {agent.threadId === undefined && agent.state !== "unknown" && <span className="relative shrink-0 font-medium tabular-nums text-muted-foreground">
         {elapsed((agent.endedAt ?? now) - agent.startedAt)}
-      </span>
+      </span>}
     </div>
   );
 }
@@ -594,41 +620,24 @@ function Robot() {
   );
 }
 
-/** One line per agent: the robot and its number under the title, the strip under the track. */
-function AgentStrips({ agents, now, effects }: { agents: Agent[]; now: number; effects: boolean }) {
-  const [folded, setFolded] = useState(false);
-  const toggle = (
-    number: number,
-  ) => (
-    <button
-      type="button"
-      onClick={() => setFolded(!folded)}
-      aria-expanded={!folded}
-      title={folded ? "Show agents" : "Fold agents"}
-      className="flex h-[20px] w-[24%] min-w-0 max-w-[16rem] shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground hover:text-foreground"
-    >
-      <Robot />
-      <span className="tabular-nums">{number}</span>
+/** Thread-level list; expansion is independent of plan visibility. */
+function AgentStrips({ agents, now, effects, threadId }: { agents: Agent[]; now: number; effects: boolean; threadId: string }) {
+  const [expanded, setExpanded] = useCollapsed(`agents:${threadId}`);
+  const ordered = visibleAgents(agents, now, 5_000).sort((a, b) => {
+    const rank: Record<AgentState, number> = { error: 0, running: 1, unknown: 2, done: 3 };
+    return rank[a.state] - rank[b.state];
+  });
+  const count = (state: AgentState) => agents.filter(agent => agent.state === state).length;
+  return <section className="border-t border-border/60 px-3 py-2" aria-label="Thread agents">
+    <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}
+      className="flex min-h-8 w-full flex-wrap items-center gap-2 text-left text-xs text-muted-foreground">
+      <Robot /><span className="font-medium text-foreground">Thread agents · {agents.length}</span>
+      <span>{count("running")} running · {count("done")} done · {count("error")} errors · {count("unknown")} unknown</span>
+      {ordered.length > 3 && <span>{expanded ? "Show fewer" : `Show all (${ordered.length})`}</span>}
     </button>
-  );
-  const line = (key: string, number: number, strip: React.ReactNode) => (
-    <div key={key} className="flex items-center gap-3">
-      <span className="size-3.5 shrink-0" />
-      {toggle(number)}
-      <div className="min-w-0 flex-1">{strip}</div>
-      {/* under the percent and the two buttons */}
-      <span className="w-[5.25rem] shrink-0" />
-    </div>
-  );
-  return (
-    <div className="mt-1.5 flex flex-col gap-1">
-      {folded
-        ? line("folded", agents.length, null)
-        : agents.map((agent, index) =>
-            line(agent.id, index + 1, <AgentStrip agent={agent} now={now} effects={effects} />),
-          )}
-    </div>
-  );
+    <div className="flex flex-col gap-1">{(expanded ? ordered : ordered.slice(0, 3)).map(agent =>
+      <AgentStrip key={agent.id} agent={agent} now={now} effects={effects} />)}</div>
+  </section>;
 }
 
 function RowGlyph({ state }: { state: BarState }) {
@@ -654,13 +663,11 @@ function BarRow({
   bar,
   now,
   effects,
-  agents,
   onHide,
 }: {
   bar: Bar;
   now: number;
   effects: boolean;
-  agents: Agent[];
   onHide: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -699,7 +706,6 @@ function BarRow({
           </div>
         </details>
       </div>
-      {agents.length === 0 ? null : <AgentStrips agents={agents} now={now} effects={effects} />}
       {open ? <Steps bar={bar} now={now} /> : null}
     </div>
   );
@@ -767,6 +773,7 @@ function Banner() {
   const bars = useBars(threadId);
   const warning = useProgressWarning(threadId);
   const allAgents = useAgents(threadId);
+  const approvals = useApprovals(threadId);
   const options = useOptions();
   const [collapsed, setCollapsed] = useCollapsed(threadId);
   // Keep the other view choices scoped too, without showing a previous thread's hidden list.
@@ -775,7 +782,6 @@ function Banner() {
   const showHidden = view.threadId === threadId && view.hidden;
   const [failure, setFailure] = useState<{ threadId: string; text: string } | null>(null);
   const now = useNow(bars.some(bar => bar.state !== "done") || allAgents.length > 0 || (options.autoClose && bars.length > 0));
-  const agents = visibleAgents(allAgents, now, 5_000);
   const hasRunningAgents = allAgents.some(agent => agent.state === "running");
   const setVisibility = useCallback(async (id: string, hidden: boolean, endedAt?: number) => {
     if (threadId === null) return;
@@ -817,16 +823,13 @@ function Banner() {
     if (changed !== undefined) chime(changed.state);
   }, [bars, options.sounds, threadId]);
 
-  if (threadId === null || (bars.length === 0 && !warning)) return null;
+  if (threadId === null || (bars.length === 0 && !warning && allAgents.length === 0 && approvals === 0)) return null;
   const visible = orderedPlans(bars.filter(bar => bar.hidden === undefined));
   const hidden = orderedPlans(bars.filter(bar => bar.hidden !== undefined));
   const shown = showAll ? visible : visible.slice(0, VISIBLE_PLANS);
   const needsInput = bars.filter(bar => bar.state === "needs_input").length;
   const errors = bars.filter(bar => bar.state === "error").length;
   const running = bars.filter(bar => bar.state === "running").length;
-  // Timeline agents belong to the latest work, not to an older question sorted first.
-  const byUpdate = [...bars].sort((a, b) => b.updatedAt - a.updatedAt);
-  const host = (byUpdate.find(bar => bar.state !== "done") ?? byUpdate[0])?.id;
   const controls = `pp-plans-${threadId}`;
   const textButton = "min-h-8 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground";
   return (
@@ -843,10 +846,12 @@ function Banner() {
         {errors > 0 && <span style={{ color: STATE_COLOR.error }}>{errors} {errors === 1 ? "error" : "errors"}</span>}
         {collapsed && hidden.length > 0 && <span>{hidden.length} hidden</span>}
       </button>
+      {approvals > 0 && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals} open approval {approvals === 1 ? "request" : "requests"} in this thread</div>}
+      {allAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
       {!collapsed && <div id={controls}>
         <div className="divide-y divide-border/60">
           {shown.map(bar => <BarRow key={`${bar.id}:${bar.createdAt}`} bar={bar} now={now} effects={options.effects}
-            agents={bar.id === host ? agents : []} onHide={() => void setVisibility(bar.id, true)} />)}
+            onHide={() => void setVisibility(bar.id, true)} />)}
         </div>
         <div className="flex flex-wrap items-center gap-1 px-2 py-1">
           {visible.length > VISIBLE_PLANS && <button type="button" className={textButton} aria-expanded={showAll}

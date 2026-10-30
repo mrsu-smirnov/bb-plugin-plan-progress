@@ -118,6 +118,73 @@ thread or deliberately use `bb plan-progress clear` to remove all its plans;
 that explicit clear command is permanent. Plans removed by older versions
 cannot be recovered by this update.
 
+## Coverage against the original (audit: 2026-10-30)
+
+This is a partial port, not feature parity. Compared BB 0.4.0
+(`d3d3a133e5ba39da5cb5908cf2d254205a315fd7`) against a fresh Git clone of
+[zycck/claude-mods at b77335e](https://github.com/zycck/claude-mods/tree/b77335ee560c609d67ae85c7321f886719361426/plugins/plan-progress).
+That is still upstream main and is identical to our recorded original baseline.
+This audit reads the implementation, types, settings, skill and regression
+scenarios; it does not claim live equivalence across platforms or providers.
+
+| Capability | BB 0.4.0 compared with upstream |
+| --- | --- |
+| Plans, stages, steps, short updates, replanning, restart under the same id | Ported at the protocol level; not identical in every rendering edge case |
+| Four plan states, progress marks, timings and effects | Present; drawing uses React/CSS rather than SVG and terminal raster frames |
+| Reduced-motion preference | Present for track animations |
+| Answer speed | Present; estimated from BB events and corrected with BB's final token counts, rather than direct per-response streaming access |
+| Sounds | Present as browser-synthesised tones; upstream uses WAV assets through the Claude host |
+| Persistence | Present per BB thread in KV; upstream has its own last-20-session save/restore mechanism |
+| Hide all plans | Present in 0.4.0 with a persistent Progress button. Upstream uses `/progress`; a new plan reopens its block |
+| Completed-plan auto-close | Present. **Upstream defaults to off**; BB 0.4.0 defaults to on. Both use 30 seconds initially and respect saved preferences |
+| Plan-list length | BB shows three and retains hidden plans. Upstream retains at most three and evicts older plans |
+| Individual hide/restore | BB addition. Upstream's cross removes the plan; it has no hidden-plan restore list |
+| Limit the number of agent strips | **Missing.** Upstream budgets 3/4/5 rows according to the number of bars, prioritises unfinished agents and adds a `+N more · K done` row. Our current AgentStrips maps every visible agent |
+| Fold agent strips | Partial: each BB host row can fold them locally; upstream stores the choice on the plan and has `/progress-agents` for all plans |
+| Readable model/tool labels in narrow strips | Partial. Upstream shortens Claude model names and MCP tool prefixes, drops tool/time before the task name in a narrow strip, and marks nested agents. BB mostly truncates the combined title/model; child-thread tools are absent |
+| Automatic Agents bar without a task plan | **Missing.** Upstream creates `agents:auto`, counts finished/total agents and needs no model call. BB renders strips only when a plan row is rendered |
+| Bind agents to their own plan | **Missing equivalent.** Upstream stores each agent's home plan and parent/depth; BB attaches the current aggregate to the latest unfinished plan |
+| Waiting for approval | **Missing agent state.** Upstream turns a strip amber while a real permission dialog is open. BB AgentState is running/done/error |
+| Resumed agents and teammates | Partial. BB rereads timeline/thread status. Upstream additionally tracks resting teammates, wakes an ended strip, recovers missing finish events, and hands an unfinished subagent-owned plan back to the lead |
+| Keep failed agent strips visible | Different: upstream keeps failed strips with the bar until it closes; BB filters errors out after two minutes |
+| Parse an approved Plan Mode plan into a bar | **Missing.** Upstream handles ExitPlanMode and builds/updates the `plan` bar from Markdown; BB currently relies on the agent to call the progress tool |
+| Detect a question automatically | Partial. Upstream intercepts AskUserQuestion and can recognise a final question at Stop; BB relies on explicit needs_input. BB clears waiting plans on thread.active, an approximation of a human reply |
+| Remind the agent of existing plans at a new human prompt | **Missing equivalent.** Upstream adds a short list of open plan ids and positions to prompt context |
+| Enforce a plan before repeated edits | **Missing equivalent.** Upstream refuses the fourth edit once if no plan exists, exempting shell calls and plan-file writes; BB sends a bounded reminder after work calls instead |
+| Remind repeatedly about stale plans | Different: upstream can nudge every six successful edits with an open plan; BB sends at most one reminder per active turn and counts reads/commands too |
+| Check open plans before ending the answer | **Missing.** Upstream's Stop hook can block one unexplained finish, while allowing questions/background waits. BB does not block a completed turn |
+| Settings shortcut next to speed | **Missing.** Upstream has a gear and `/plan-progress-settings`; BB settings are reached through host plugin settings |
+| Localised settings and update UI | **Missing.** Upstream contains 35 language tables and chooses language from Claude/app/system settings. Our plugin labels are English |
+| Plugin-specific update check and notice | Upstream has a six-hour check, a gear badge, and an Update action. BB uses host plugin management; a duplicate updater is not required for parity of the user outcome |
+| Arbitrary auto-close delay | Different: upstream config accepts positive seconds; BB offers 10/30/60 |
+| Theme-specific terminal drawing, Omarchy and OS appearance probes | Not applicable as-is to a BB web banner. BB follows host classes, but fixed track/agent colours need a separate light-theme contrast audit |
+| Missing-tool warning | Different: upstream checks whether the loopback MCP tool reached the session and warns once. BB diagnoses original-vs-BB tool collisions and isolates the Desktop mod; it has no equivalent preflight for a missing BB tool |
+| Substeps | Not an omitted working UI: upstream types/Markdown parser retain them, but the public step schema deliberately omits them, drawing does not display them, and short ops cannot address them |
+
+Additional rendering differences found by source inspection:
+
+- Upstream caps an unfinished plan's displayed percent at 99. BB can show 100
+  while state is needs_input or error.
+- BB's numeric percent counts skipped steps as finished, but its track fill's
+  head helper currently counts only done. A skipped step can make the fill and
+  numeric percent disagree.
+- Upstream positions the pill's stage/step by the completed share of the track;
+  BB uses the active/error step. Completing steps out of order can therefore
+  produce different pill labels.
+- These are code-level findings; focused visual reproductions are still needed.
+
+Corrections to earlier comparisons: upstream auto-close is **off**, and its
+whole-block toggle is the `/progress` command, not a Progress-count button.
+The earlier comparison did not inspect the complete pinned source. A fresh
+clone at the pinned commit is the evidence for this table.
+A claim of complete parity must be backed by this inventory and scenario
+checks, not by the number of passing tests in the port alone.
+
+Suggested order: compact and readable agent strips; automatic agent bar and
+accurate agent states/ownership; Plan Mode and question lifecycle; then decide
+whether enforcement hooks are desirable and supported by the public BB SDK.
+No SDK limitation is assumed proven solely because this port lacks a feature.
+
 ## Develop
 
 ```bash

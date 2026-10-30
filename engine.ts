@@ -32,6 +32,9 @@ export interface Bar {
   createdAt: number;
   updatedAt: number;
   endedAt?: number;
+  /** Presentation only: hidden plans still accept agent updates. */
+  hidden?: "manual" | "auto";
+  autoCloseHandledAt?: number;
 }
 
 export interface StepInput {
@@ -64,7 +67,7 @@ export type ApplyResult =
   | { ok: false; error: string };
 
 export const LIMITS = {
-  barsPerThread: 12,
+  barsPerThread: 100,
   stages: 12,
   stepsPerStage: 30,
   title: 80,
@@ -289,26 +292,20 @@ function buildStages(op: Op): Stage[] | string {
   return stages;
 }
 
-/** Adds or replaces one bar; past the cap, finished bars go first, then running ones; a question or an error stays. */
+/** Display limits must never discard plans that the agent is still updating. */
 function placeBar(list: readonly Bar[], next: Bar): Bar[] {
-  const rest = list.some((bar) => bar.id === next.id)
+  return list.some((bar) => bar.id === next.id)
     ? list.map((bar) => (bar.id === next.id ? next : bar))
     : [...list, next];
-  const pick = (ok: (bar: Bar) => boolean) => rest.findIndex((bar) => bar.id !== next.id && ok(bar));
-  while (rest.length > LIMITS.barsPerThread) {
-    const at =
-      [pick((bar) => bar.state === "done"), pick((bar) => bar.state === "running"), pick(() => true)].find(
-        (index) => index >= 0,
-      ) ?? 0;
-    rest.splice(at, 1);
-  }
-  return rest;
 }
 
 export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult {
   const id = clip(op.id, 64);
   if (id === "") return { ok: false, error: "id is required." };
   const prev = bars.find((bar) => bar.id === id) ?? null;
+  if (prev === null && bars.length >= LIMITS.barsPerThread) {
+    return { ok: false, error: `This thread already keeps ${LIMITS.barsPerThread} plans. Existing plans remain updatable. Use a new thread or explicitly clear old plans with bb plan-progress clear.` };
+  }
 
   const sent = buildStages(op);
   if (typeof sent === "string") return { ok: false, error: sent };
@@ -354,8 +351,32 @@ export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult 
   };
   if (note !== "") bar.note = note;
   if (state === "done") bar.endedAt = was?.state === "done" ? (was.endedAt ?? now) : now;
+  if (was !== null) {
+    const attention = (state === "needs_input" || state === "error") &&
+      (was.state !== state || was.note !== bar.note);
+    if (was.hidden !== undefined && !attention && !(was.hidden === "auto" && state !== "done")) bar.hidden = was.hidden;
+    if (bar.endedAt !== undefined && was.autoCloseHandledAt === bar.endedAt) {
+      bar.autoCloseHandledAt = was.autoCloseHandledAt;
+    }
+  }
 
-  return { ok: true, bars: placeBar(bars, bar), bar };
+  const placed = placeBar(bars, bar);
+  // Leave headroom under BB KV's 256 KiB per-value limit; refuse atomically.
+  if (new TextEncoder().encode(JSON.stringify(placed)).byteLength > 240_000) {
+    return { ok: false, error: "Plan storage is full for this thread. No plans were removed. Use a new thread or explicitly clear old plans with bb plan-progress clear." };
+  }
+  return { ok: true, bars: placed, bar };
+}
+
+/** A timed request includes the finish it saw, so it cannot hide a reopened task. */
+export function setVisibility(bar: Bar, hidden: boolean, endedAt?: number): Bar {
+  if (endedAt !== undefined && (bar.state !== "done" || bar.endedAt !== endedAt ||
+      bar.autoCloseHandledAt === endedAt || bar.hidden !== undefined)) return bar;
+  const next = { ...bar };
+  if (hidden) next.hidden = endedAt === undefined ? "manual" : "auto";
+  else delete next.hidden;
+  if (bar.state === "done" && bar.endedAt !== undefined) next.autoCloseHandledAt = bar.endedAt;
+  return next;
 }
 
 /** The person answered: a bar waiting on them goes back to work (or done, when nothing is left). */

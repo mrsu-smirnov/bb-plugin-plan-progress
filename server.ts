@@ -13,6 +13,7 @@ import {
   describe,
   STATE_NAMES,
   stateOf,
+  setVisibility,
   STEP_NAMES,
   type Bar,
   type Op,
@@ -41,6 +42,10 @@ export const rpcContract = defineRpcContract({
   bars_dismiss: {
     input: z.object({ threadId: z.string().min(1), id: z.string().min(1) }),
     output: z.object({ removed: z.boolean() }),
+  },
+  bars_setVisibility: {
+    input: z.object({ threadId: z.string().min(1), id: z.string().min(1), hidden: z.boolean(), endedAt: z.number().optional() }),
+    output: z.object({ changed: z.boolean() }),
   },
 });
 
@@ -112,8 +117,8 @@ export default async function plugin(bb: BbPluginApi) {
     autoClose: {
       type: "boolean",
       label: "Auto-close",
-      description: "A finished bar leaves on its own.",
-      default: false,
+      description: "Hide finished plans automatically. You can restore them from Hidden plans.",
+      default: true,
     },
     autoCloseSeconds: {
       type: "select",
@@ -354,13 +359,26 @@ export default async function plugin(bb: BbPluginApi) {
     agents_get: async ({ threadId }) => ({
       agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
     }),
+    // Retained for an already-open 0.3 frontend during a live update. Hide, never delete.
     bars_dismiss: ({ threadId, id }) =>
       serial(threadId, async () => {
         const bars = await readBars(threadId);
-        const remaining = bars.filter((bar) => bar.id !== id);
-        if (remaining.length === bars.length) return { removed: false };
-        await writeBars(threadId, remaining);
+        if (!bars.some(bar => bar.id === id)) return { removed: false };
+        await writeBars(threadId, bars.map(bar => bar.id === id ? setVisibility(bar, true) : bar));
         return { removed: true };
+      }),
+    bars_setVisibility: ({ threadId, id, hidden, endedAt }) =>
+      serial(threadId, async () => {
+        const bars = await readBars(threadId);
+        let changed = false;
+        const next = bars.map(bar => {
+          if (bar.id !== id) return bar;
+          const updated = setVisibility(bar, hidden, endedAt);
+          changed = updated !== bar;
+          return updated;
+        });
+        if (changed) await writeBars(threadId, next);
+        return { changed };
       }),
   });
 

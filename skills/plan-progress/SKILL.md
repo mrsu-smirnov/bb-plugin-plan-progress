@@ -46,14 +46,21 @@ used twice means the one still open. Titles compare without case.
 
 The result says `done/total, state, active step`; no need to check the bar.
 
-A thread keeps at most 12 bars: finished ones leave first, then running ones;
-a bar waiting on the user or showing an error stays.
+Hidden bars remain stored and accept the same short ops. A new question or
+error resurfaces a hidden bar. The display shows three plans by default; this
+is not a storage limit. Up to 100 plans and 240 KB are retained per thread;
+exceeding that safety budget refuses the op without evicting old plans. Use
+a new thread at capacity; only clear old plans when the user requests it.
 
 ## Where the user sees it
 
 A card above the thread's message box, one row per bar: state, title, the
 track with a pill naming the stage and step (the elapsed time on hover),
-percent, a fold button for the step list, and close. On a question or an
+percent, a fold button for the step list, and a … menu with Hide plan.
+Progress · N folds the whole block (remembered per browser and thread).
+Show all expands the short list. Hidden plans → Restore returns a hidden plan.
+Completed plans auto-hide after 30 seconds by default; saved settings are kept.
+Restoring a completed plan keeps that finish visible. On a question or an
 error the pill shows the `note`. Settings (effects, auto-close and its seconds,
 sounds): bb Settings → Plugins → Plan Progress → the gear at the top right, or
 `bb plugin config plan-progress set <key> <value>` with keys `effects`,

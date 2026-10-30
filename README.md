@@ -90,6 +90,34 @@ learned from the exact counts, which this browser keeps. When BB reports the
 exact count, the figure loses its `≈`. The box hides it in its compact,
 one-line layout.
 
+## Compact plans (0.4.0)
+
+![Nine plans shown compactly, with questions and errors first](media/compact-desktop.jpg)
+
+[See the narrow-screen layout](media/compact-mobile.jpg).
+
+Click **Progress · N** to fold or show the entire block. The choice is remembered
+for this thread in this browser and is not reset by new plans or updates.
+The summary still shows how many plans need your answer or have errors.
+
+Three plans are shown at a time, with questions and errors first. **Show all**
+opens the full list. On narrow screens the title and track have separate lines.
+Use a plan's **… → Hide plan** menu to hide it; **Hidden plans → Restore** brings
+it back. Hidden plans keep receiving agent updates. A new question or error
+brings a hidden plan back to attention. Hiding never stops an agent or removes
+a thread or its files.
+
+Finished plans hide after 30 seconds by default, once the thread's tracked
+agents have finished. They remain in Hidden plans. Restoring a finished plan
+keeps that completion visible. Existing saved auto-close preferences are kept.
+
+Plans are no longer silently discarded when the list grows beyond twelve.
+A thread retains up to 100 plans, within a 240 KB storage budget. At the safety
+limit a new operation is refused without removing existing plans. Start a new
+thread or deliberately use `bb plan-progress clear` to remove all its plans;
+that explicit clear command is permanent. Plans removed by older versions
+cannot be recovered by this update.
+
 ## Develop
 
 ```bash
@@ -97,6 +125,7 @@ npm install
 npm test          # the bar engine
 npm run test:integration # build and exercise the backend and host launcher
 npm run typecheck
+npm run test:ui    # real banner through the public SDK UI harness
 bb plugin install .
 bb plugin dev     # rebuild and reload on save
 ```
@@ -115,7 +144,7 @@ Configuration. Or from a terminal: `bb plugin config plan-progress set <key> <va
 | Session-only isolation of the original Claude mod | `isolateClaude` | on |
 | Optional absolute native Claude executable path on the host | `claudeExecutable` | empty: find on PATH |
 | One automatic progress reminder per active turn | `automaticReminders` | on |
-| Auto-close: a finished bar leaves on its own | `autoClose` | off |
+| Auto-close: hide finished plans; restore from Hidden plans | `autoClose` | on |
 | Stays for: 10, 30 or 60 s before it leaves | `autoCloseSeconds` | 30 |
 | Answer speed: ≈ tok/s in the message box | `speed` | on |
 | Sounds: a chime on a question, an error and the finish | `sounds` | off |

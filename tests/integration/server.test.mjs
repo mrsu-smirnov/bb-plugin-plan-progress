@@ -109,3 +109,33 @@ test("a missing-plan reminder uses strict steering once and never sends from an 
     assert.equal(sent.length, 1);
   } finally { await h.dispose(); }
 });
+
+
+test("hiding through RPC keeps the plan updatable, survives reload, and is reversible", async () => {
+  const { bb, harness } = createFakePluginHost({ pluginId: "plan-progress", settings: { autoClose: false } });
+  let h = harness;
+  try {
+    await plugin(bb);
+    const args = { threadId: "thread-test", id: "visibility" };
+    await h.callAgentTool("plan_progress", { id: args.id, steps: [{ title: "First" }, { title: "Second" }] });
+    await h.callRpc("bars_setVisibility", { ...args, hidden: true });
+    const result = await h.callAgentTool("plan_progress", { id: args.id, next: true });
+    assert.match(result, /1\/2 done/);
+    h = (await h.lifecycle.reload(plugin)).harness;
+    let { bars } = await h.callRpc("bars_get", { threadId: args.threadId });
+    assert.equal(bars.length, 1);
+    assert.equal(bars[0].hidden, "manual");
+    await h.callRpc("bars_setVisibility", { ...args, hidden: false });
+    ({ bars } = await h.callRpc("bars_get", { threadId: args.threadId }));
+    assert.equal(bars[0].hidden, undefined);
+    // The old frontend's cross must also be safe during an upgrade.
+    await h.callRpc("bars_dismiss", args);
+    assert.match(await h.callAgentTool("plan_progress", { id: args.id, next: true }), /2\/2 done/);
+    ({ bars } = await h.callRpc("bars_get", { threadId: args.threadId }));
+    const endedAt = bars[0].endedAt;
+    await h.callRpc("bars_setVisibility", { ...args, hidden: false });
+    assert.equal((await h.callRpc("bars_setVisibility", { ...args, hidden: true, endedAt })).changed, false);
+    const config = await h.runCli(["show", "--json"], { threadId: args.threadId });
+    assert.equal(JSON.parse(config.stdout).length, 1);
+  } finally { await h.dispose(); }
+});

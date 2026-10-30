@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { answered, applyOp, counts, describe } from "../engine.ts";
+import { answered, applyOp, counts, describe, LIMITS, setVisibility } from "../engine.ts";
 
 const plan = {
   id: "auth",
@@ -170,21 +170,57 @@ test("a title used twice means the open one", () => {
   assert.equal(bar.state, "done");
 });
 
-test("the cap drops finished bars, then running ones, and keeps a question", () => {
+test("more than twelve plans are retained; reaching the safety cap never evicts one", () => {
   let bars = [];
-  for (let index = 0; index < 12; index += 1) {
-    const id = `b${index}`;
-    bars = applyOp(bars, { id, title: id, steps: [{ title: "x" }] }, index).bars;
+  for (let index = 0; index < LIMITS.barsPerThread; index++) {
+    const result = applyOp(bars, { id: `b${index}`, steps: [{ title: "x" }] }, index);
+    assert.ok(result.ok, result.error);
+    bars = result.bars;
   }
-  bars = applyOp(bars, { id: "b0", state: "needs_input" }, 20).bars;
-  bars = applyOp(bars, { id: "b5", state: "done" }, 21).bars;
-  bars = applyOp(bars, { id: "b12", title: "b12", steps: [{ title: "x" }] }, 22).bars;
-  bars = applyOp(bars, { id: "b13", title: "b13", steps: [{ title: "x" }] }, 23).bars;
-  const ids = bars.map((bar) => bar.id);
-  assert.equal(ids.length, 12);
-  assert.ok(ids.includes("b0"), "the question stays");
-  assert.ok(!ids.includes("b5"), "the finished bar goes first");
-  assert.ok(!ids.includes("b1"), "then the oldest running one");
+  const refused = applyOp(bars, { id: "overflow", steps: [{ title: "x" }] }, 200);
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /already keeps/);
+  assert.equal(bars.length, LIMITS.barsPerThread);
+  assert.ok(applyOp(bars, { id: "b0", next: true }, 201).ok);
+});
+
+test("hiding preserves short updates, restores explicitly, and surfaces new questions and errors", () => {
+  const initial = run([plan]).bar;
+  const hidden = setVisibility(initial, true);
+  assert.equal(hidden.hidden, "manual");
+  const updated = applyOp([hidden], next, 3000).bar;
+  assert.equal(updated.hidden, "manual");
+  assert.equal(counts(updated).done, 1);
+  assert.equal(setVisibility(updated, false).hidden, undefined);
+  const asking = applyOp([updated], { id: plan.id, state: "needs_input", note: "Choose" }, 4000).bar;
+  assert.equal(asking.hidden, undefined);
+  const hiddenQuestion = setVisibility(asking, true);
+  assert.equal(applyOp([hiddenQuestion], { id: plan.id, state: "needs_input", note: "Choose" }, 5000).bar.hidden, "manual");
+  assert.equal(applyOp([hiddenQuestion], { id: plan.id, state: "error", note: "Failed" }, 6000).bar.hidden, undefined);
+});
+
+test("auto-hide is tied to a finish and restoration is not immediately hidden again", () => {
+  const finished = run([plan, { id: plan.id, state: "done" }]).bar;
+  const hidden = setVisibility(finished, true, finished.endedAt);
+  assert.equal(hidden.hidden, "auto");
+  const restored = setVisibility(hidden, false);
+  assert.equal(restored.autoCloseHandledAt, finished.endedAt);
+  assert.equal(setVisibility(restored, true, finished.endedAt), restored);
+  const reopened = applyOp([hidden], { id: plan.id, active: "Миграция" }, 5000).bar;
+  assert.equal(reopened.hidden, undefined);
+  assert.equal(reopened.autoCloseHandledAt, undefined);
+  assert.equal(setVisibility(reopened, true, finished.endedAt), reopened);
+  const nextRun = applyOp([hidden], { ...plan, title: "Next task" }, 6000).bar;
+  assert.equal(nextRun.hidden, undefined);
+});
+
+test("storage overflow is refused without losing the old plans", () => {
+  const bars = Array.from({ length: 80 }, (_, i) => ({ ...run([plan]).bar, id: `b${i}`, note: "я".repeat(2000) }));
+  const before = JSON.stringify(bars);
+  const result = applyOp(bars, { id: "new", steps: [{ title: "x" }] }, 9999);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /storage is full/);
+  assert.equal(JSON.stringify(bars), before);
 });
 
 test("describe answers done/total, state and active step", () => {

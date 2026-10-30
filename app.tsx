@@ -31,6 +31,7 @@ import {
 import { AGENTS_CHANGED, visibleAgents, type Agent, type AgentState } from "./agents";
 import { SPEED_EVENT_TYPES, SpeedMeter, speedLabel, type Speed, type SpeedEvent } from "./speed";
 import { cn } from "@/lib/utils";
+import { dueToHide, orderedPlans, VISIBLE_PLANS } from "./presentation";
 import { DIAGNOSTICS_CHANGED, type ProgressDiagnostic } from "./diagnostics";
 
 // ---------- data ----------
@@ -123,7 +124,7 @@ function useOptions(): Options {
   const { values } = useSettings();
   return {
     effects: values?.effects !== false,
-    autoClose: values?.autoClose === true,
+    autoClose: values?.autoClose !== false,
     autoCloseSeconds: Number(values?.autoCloseSeconds ?? 30) || 30,
     sounds: values?.sounds === true,
     speed: values?.speed !== false,
@@ -654,38 +655,49 @@ function BarRow({
   now,
   effects,
   agents,
-  onClose,
+  onHide,
 }: {
   bar: Bar;
   now: number;
   effects: boolean;
   agents: Agent[];
-  onClose: () => void;
+  onHide: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const { done, total } = counts(bar);
   const percent = bar.state === "done" ? 100 : total === 0 ? 0 : Math.round((done / total) * 100);
   return (
     <div className="px-3 py-2">
-      <div className="flex items-center gap-3">
+      <div className="pp-plan-row">
         <RowGlyph state={bar.state} />
         <button
           type="button"
           onClick={() => setOpen(!open)}
           aria-expanded={open}
           title={`${bar.title} · ${STATE_LABEL[bar.state]}`}
-          className="w-[24%] min-w-0 max-w-[16rem] shrink-0 truncate text-left text-sm text-foreground hover:underline"
+          className="pp-plan-title min-w-0 truncate text-left text-sm text-foreground hover:underline"
         >
           {bar.title}
         </button>
-        <Track bar={bar} now={now} effects={effects} />
+        <div className="pp-plan-track min-w-0"><Track bar={bar} now={now} effects={effects} /></div>
         <span className="w-9 shrink-0 text-right text-sm tabular-nums text-muted-foreground">{percent}%</span>
         <IconButton label={open ? "Hide steps" : "Show steps"} onClick={() => setOpen(!open)}>
           <path d={open ? "M4 10l4-4 4 4" : "M4 6l4 4 4-4"} />
         </IconButton>
-        <IconButton label={`Close "${bar.title}"`} onClick={onClose}>
-          <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
-        </IconButton>
+        <details className="relative">
+          <summary aria-label={`Actions for plan "${bar.title}"`} title="Plan actions"
+            className="flex size-8 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground">
+            <svg viewBox="0 0 16 16" className="size-4" aria-hidden fill="currentColor">
+              <circle cx="3" cy="8" r="1" /><circle cx="8" cy="8" r="1" /><circle cx="13" cy="8" r="1" />
+            </svg>
+          </summary>
+          <div className="absolute right-0 top-full z-50 w-48 rounded-lg border border-border bg-background p-2 shadow-lg">
+            <button type="button" aria-label={`Hide plan "${bar.title}"`}
+              className="min-h-9 w-full rounded-md px-2 text-left text-sm text-foreground hover:bg-muted"
+              onClick={event => { event.currentTarget.closest("details")?.removeAttribute("open"); onHide(); }}>Hide plan</button>
+            <p className="px-2 pb-1 text-xs text-muted-foreground">Keeps updating. Restore from Hidden plans.</p>
+          </div>
+        </details>
       </div>
       {agents.length === 0 ? null : <AgentStrips agents={agents} now={now} effects={effects} />}
       {open ? <Steps bar={bar} now={now} /> : null}
@@ -724,6 +736,30 @@ function chime(state: BarState): void {
   }
 }
 
+// The choice belongs to this browser and thread; progress updates never reopen it.
+function useCollapsed(threadId: string | null): [boolean, (value: boolean) => void] {
+  const key = `plan-progress:collapsed:${threadId}`;
+  const read = () => { try { return localStorage.getItem(key) === "true"; } catch { return false; } };
+  const [saved, setSaved] = useState(() => ({ key, value: read() }));
+  const value = saved.key === key ? saved.value : read();
+  return [value, (next: boolean) => {
+    setSaved({ key, value: next });
+    try { localStorage.setItem(key, String(next)); } catch { /* private browsing */ }
+  }];
+}
+
+const BANNER_STYLE = `
+.pp-banner { container-type: inline-size; }
+.pp-plan-row { display: grid; grid-template-columns: 14px minmax(0,24%) minmax(0,1fr) 36px 28px 28px; align-items:center; gap:8px; }
+.pp-plan-track > div { width:100%; }
+@container (max-width: 480px) {
+  .pp-plan-row { grid-template-columns:14px minmax(0,1fr) 36px 32px 32px; gap:6px; }
+  .pp-plan-track { grid-row:2; grid-column:2 / -1; }
+  .pp-plan-row > button { min-height:32px; }
+  .pp-plan-title { white-space:normal; overflow-wrap:anywhere; }
+}
+`;
+
 function Banner() {
   const composer = useComposer();
   const threadId = composer.scope.kind === "thread" ? composer.scope.threadId : null;
@@ -732,71 +768,108 @@ function Banner() {
   const warning = useProgressWarning(threadId);
   const allAgents = useAgents(threadId);
   const options = useOptions();
-  const now = useNow(
-    bars.some((bar) => bar.state !== "done") ||
-      allAgents.length > 0 ||
-      (options.autoClose && bars.length > 0),
-  );
-  // as in the original: a finished strip stays 5 s, one with an error a while longer
+  const [collapsed, setCollapsed] = useCollapsed(threadId);
+  // Keep the other view choices scoped too, without showing a previous thread's hidden list.
+  const [view, setView] = useState({ threadId, all: false, hidden: false });
+  const showAll = view.threadId === threadId && view.all;
+  const showHidden = view.threadId === threadId && view.hidden;
+  const [failure, setFailure] = useState<{ threadId: string; text: string } | null>(null);
+  const now = useNow(bars.some(bar => bar.state !== "done") || allAgents.length > 0 || (options.autoClose && bars.length > 0));
   const agents = visibleAgents(allAgents, now, 5_000);
+  const hasRunningAgents = allAgents.some(agent => agent.state === "running");
+  const setVisibility = useCallback(async (id: string, hidden: boolean, endedAt?: number) => {
+    if (threadId === null) return;
+    try {
+      await rpc.call("bars_setVisibility", { threadId, id, hidden, ...(endedAt === undefined ? {} : { endedAt }) });
+      setFailure(null);
+      return true;
+    } catch {
+      setFailure({ threadId, text: "Could not change plan visibility. Please try again." });
+      return false;
+    }
+  }, [rpc, threadId]);
 
-  const close = useCallback(
-    (id: string) => {
-      if (threadId !== null) void rpc.call("bars_dismiss", { threadId, id });
-    },
-    [rpc, threadId],
-  );
-
-  // auto-close: a finished bar leaves after the chosen seconds, asked once per finish
-  const dismissed = useRef(new Set<string>());
+  // One successful request per finish, even before the realtime refetch arrives.
+  // A failed request may be retried on the next tick.
+  const hiding = useRef(new Set<string>());
   useEffect(() => {
     if (!options.autoClose) return;
+    const finishes = new Set(bars.map(bar => `${threadId}:${bar.id}:${bar.endedAt}`));
+    for (const key of hiding.current) if (!finishes.has(key)) hiding.current.delete(key);
     for (const bar of bars) {
+      if (!dueToHide(bar, now, options.autoCloseSeconds, hasRunningAgents)) continue;
       const key = `${threadId}:${bar.id}:${bar.endedAt}`;
-      if (
-        bar.state === "done" &&
-        bar.endedAt !== undefined &&
-        now - bar.endedAt >= options.autoCloseSeconds * 1000 &&
-        !dismissed.current.has(key)
-      ) {
-        dismissed.current.add(key);
-        close(bar.id);
-      }
+      if (hiding.current.has(key)) continue;
+      hiding.current.add(key);
+      void setVisibility(bar.id, true, bar.endedAt).then(ok => { if (!ok) hiding.current.delete(key); });
     }
-  }, [bars, now, threadId, options.autoClose, options.autoCloseSeconds, close]);
+  }, [bars, now, threadId, options.autoClose, options.autoCloseSeconds, hasRunningAgents, setVisibility]);
 
-  // sounds: on a change of state seen live, not on load
   const seen = useRef<Map<string, BarState> | null>(null);
   useEffect(() => {
     const previous = seen.current;
-    seen.current = new Map(bars.map((bar) => [`${bar.id}:${bar.createdAt}`, bar.state]));
+    seen.current = new Map(bars.map(bar => [`${threadId}:${bar.id}:${bar.createdAt}`, bar.state]));
     if (previous === null || !options.sounds) return;
-    const changed = bars.find((bar) => {
-      const was = previous.get(`${bar.id}:${bar.createdAt}`);
+    const changed = bars.find(bar => {
+      const was = previous.get(`${threadId}:${bar.id}:${bar.createdAt}`);
       return was !== undefined && was !== bar.state;
     });
     if (changed !== undefined) chime(changed.state);
-  }, [bars, options.sounds]);
+  }, [bars, options.sounds, threadId]);
 
   if (threadId === null || (bars.length === 0 && !warning)) return null;
-  const ordered = [...bars].sort((a, b) => a.createdAt - b.createdAt);
-  // the agents go under the bar being worked on: the latest unfinished one, else the latest
+  const visible = orderedPlans(bars.filter(bar => bar.hidden === undefined));
+  const hidden = orderedPlans(bars.filter(bar => bar.hidden !== undefined));
+  const shown = showAll ? visible : visible.slice(0, VISIBLE_PLANS);
+  const needsInput = bars.filter(bar => bar.state === "needs_input").length;
+  const errors = bars.filter(bar => bar.state === "error").length;
+  const running = bars.filter(bar => bar.state === "running").length;
+  // Timeline agents belong to the latest work, not to an older question sorted first.
   const byUpdate = [...bars].sort((a, b) => b.updatedAt - a.updatedAt);
-  const host = (byUpdate.find((bar) => bar.state !== "done") ?? byUpdate[0])?.id;
+  const host = (byUpdate.find(bar => bar.state !== "done") ?? byUpdate[0])?.id;
+  const controls = `pp-plans-${threadId}`;
+  const textButton = "min-h-8 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground";
   return (
-    <div className="divide-y divide-border/60 rounded-2xl bg-muted/60 py-0.5">
-      <style>{STYLE}</style>
+    <div className="pp-banner rounded-2xl bg-muted/60 py-0.5">
+      <style>{STYLE}{BANNER_STYLE}</style>
       {warning && <div role="status" className="px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{warning}</div>}
-      {ordered.map((bar) => (
-        <BarRow
-          key={bar.id}
-          bar={bar}
-          now={now}
-          effects={options.effects}
-          agents={bar.id === host ? agents : []}
-          onClose={() => close(bar.id)}
-        />
-      ))}
+      {failure?.threadId === threadId && <div role="alert" className="px-3 py-2 text-sm text-red-500">{failure.text}</div>}
+      <button type="button" aria-expanded={!collapsed} aria-controls={controls}
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex min-h-10 w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground">
+        <span className="font-medium text-foreground">{collapsed ? "▸" : "▾"} Progress · {bars.length}</span>
+        {running > 0 && <span>{running} active</span>}
+        {needsInput > 0 && <span style={{ color: STATE_COLOR.needs_input }}>{needsInput} {needsInput === 1 ? "needs" : "need"} your answer</span>}
+        {errors > 0 && <span style={{ color: STATE_COLOR.error }}>{errors} {errors === 1 ? "error" : "errors"}</span>}
+        {collapsed && hidden.length > 0 && <span>{hidden.length} hidden</span>}
+      </button>
+      {!collapsed && <div id={controls}>
+        <div className="divide-y divide-border/60">
+          {shown.map(bar => <BarRow key={`${bar.id}:${bar.createdAt}`} bar={bar} now={now} effects={options.effects}
+            agents={bar.id === host ? agents : []} onHide={() => void setVisibility(bar.id, true)} />)}
+        </div>
+        <div className="flex flex-wrap items-center gap-1 px-2 py-1">
+          {visible.length > VISIBLE_PLANS && <button type="button" className={textButton} aria-expanded={showAll}
+            onClick={() => setView({ threadId, hidden: showHidden, all: !showAll })}>
+            {showAll ? "Show fewer" : `Show all (${visible.length})`}
+          </button>}
+          {hidden.length > 0 && <button type="button" className={textButton} aria-expanded={showHidden}
+            onClick={() => setView({ threadId, all: showAll, hidden: !showHidden })}>
+            {showHidden ? "Hide list" : `Hidden plans (${hidden.length})`}
+          </button>}
+          {visible.length === 0 && <span className="px-2 text-xs text-muted-foreground">All plans are hidden.</span>}
+        </div>
+        {showHidden && hidden.length > 0 && <div className="border-t border-border/60 px-3 py-2">
+          <p className="mb-2 text-xs text-muted-foreground">Hidden plans keep updating. Hiding does not stop agents or delete chats.</p>
+          {hidden.map(bar => <div key={bar.id} className="flex min-h-9 items-center gap-2 text-sm">
+            <RowGlyph state={bar.state} /><span className="min-w-0 flex-1 break-words">{bar.title}</span>
+            <button type="button" className={textButton} aria-label={`Restore plan "${bar.title}"`}
+              onClick={() => void setVisibility(bar.id, false).then(ok => {
+                if (ok) setView({ threadId, all: true, hidden: showHidden });
+              })}>Restore</button>
+          </div>)}
+        </div>}
+      </div>}
     </div>
   );
 }

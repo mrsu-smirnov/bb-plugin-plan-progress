@@ -3,7 +3,10 @@
 - A bar above the thread's message box for each task the agent plans: stages as capsules, steps as dots, and a pill at the head naming the current stage and step. Hover the bar to see how long the task has run; hover a mark to see its step and how long it took.
 - Four states with their own colours: working, needs your answer, error, done. On a question or an error the pill shows the agent's note, and your reply turns the bar back to working.
 - A row for each subagent under the bar: its description, model, the tool it is in right now, and its time. Background subagents count too. Finished rows fold away after a few seconds.
-- The arrow beside the percent opens the step list with the time of every step. The cross closes a bar.
+- Click Progress to fold or show the whole block. It remembers your choice for this thread in this browser. Questions and errors remain visible as counts in the summary.
+- Three plans are shown at a time, questions and errors first; Show all opens the rest. The layout adapts to narrow screens.
+- The arrow beside the percent opens the step list. Use … → Hide plan to hide one safely; Hidden plans → Restore brings it back. Hidden plans keep updating; a new question or error brings them back to attention.
+- Finished plans hide after 30 seconds by default, once tracked agents finish. You can restore them. Saved auto-close preferences are kept.
 - The plan can change mid-task: finished steps keep their done by title.
 - The answer speed in the message box, `⚡ ≈ 42 tok/s`: bright while the agent writes, dimmed with the last figure between turns. An estimate from the text it writes over the latest minute, exact after the turn when bb reports the tokens.
 

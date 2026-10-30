@@ -120,10 +120,10 @@ cannot be recovered by this update.
 
 ## Coverage and verification
 
-The full [upstream inventory and 0.5.0 candidate delta](docs/upstream-coverage.md)
+The full [upstream inventory and 0.5.0 changes](docs/upstream-coverage.md)
 separate implemented behavior, remaining differences and verification limits.
 
-## 0.5.0 work in progress: coverage and limits
+## 0.5.0: coverage and limits
 
 The thread-level agents list is independent of plans. It shows at most three
 rows by default, prioritises errors and running work, and remembers expansion
@@ -155,7 +155,7 @@ changes the state. Matching uses request IDs and request timestamps; bounded
 event reads and timestamps mean very old or indistinguishable events cannot
 be proved. Live event evidence for the new Claude and Pi scenarios is still
 needed; those providers are not currently registered on the test host. The
-prior 0.4.0 audit and scope remain in Git history. This is a partial port of
+prior 0.4.0 audit is preserved in [the coverage inventory](docs/upstream-coverage.md). This is a partial port of
 pinned upstream `b77335ee560c609d67ae85c7321f886719361426`.
 
 ## Develop

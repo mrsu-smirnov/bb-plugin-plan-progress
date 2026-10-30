@@ -4,24 +4,25 @@ The detailed baseline inventory below describes **released BB 0.4.0**, not an
 assertion that every difference is still present in 0.5.0. Keep this inventory
 available as a current document instead of relying on old Git history.
 
-## 0.5.0 candidate delta
+## 0.5.0 changes
 
-Candidate code: the current release branch, building on `fd265a8` and the 4cc review fixes. Publication and
-final independent acceptance are pending. The implementation targets three
+Implementation reviewed through `7300bb18b97ebd5592fbe72b3f9501766df98d9a`.
+Independent review found no remaining code blockers in the checked scope.
+This record covers local release acceptance. The release implements three
 packages; it does not promise full upstream parity.
 
-| Area | Implemented in the candidate | Verification boundary |
+| Area | Implemented in 0.5.0 | Verification boundary |
 | --- | --- | --- |
-| Independent compact agents | Thread-level block, three rows plus counts, expansion memory, independent of plan visibility; whole Progress collapse hides the agents too | Component matrix 0/1/3/10 agents with 0/1/9 plans; final browser acceptance pending |
+| Independent compact agents | Thread-level block, three rows plus counts, expansion memory, independent of plan visibility; whole Progress collapse hides the agents too | Component matrix 0/1/3/10 agents with 0/1/9 plans; actual BB composer checked at 390 px in light/dark themes with reduced motion |
 | Delegation collection | Flat collection traverses BB's turn.children grouping (delegation childRows remain activity, not ownership);  native delegation completion remains distinct from background launch completion | A real Codex native-agent trace confirmed turn.children and separate root/agent scopes; anonymised regression fixtures cover those shapes |
 | Outcomes | Workflow/backgroundTask outcomes joined using public identifiers; unknown stays unknown; child outcome uses the main turn that accepted the latest request | SDK fixtures and recorded Codex traces; fresh Claude/Pi sequences unavailable on this server |
 | Errors | Observed errors retained in a bounded per-thread KV trace across segment changes/reload; unknown and stale observations do not supersede the trace; newer terminal evidence or a proven new run can replace it | Integration checks; bounded to 100 retained error entries |
 | Approvals | General pending-approval signal includes current thread and direct child threads, and marks incomplete coverage on failed reads; no invented assignment to a particular native agent | Server/UI fixtures cover lifecycle refresh; final live approve/deny/cancel check pending |
 | Human replies | Visible user request correlated with its input-accepted event, excluding hidden reminders, system/agent sends, retries and answers older than the waiting state | Real envelope shapes from Codex and historic Claude/Pi demos; integration tests protect negative cases |
 | Model/duration | No inherited first-run model presented as current; child model hidden while active when correlation is not sufficient; unreliable child duration omitted | Resumed-run fixtures; live review boundary stated explicitly |
-| Plan displays | skipped agrees in percentage/fill/ARIA; stage timing is a documented wall-clock span; unknown time is omitted; checkpoint completion uses step states | Tests cover out-of-order steps and all-finished needs_input/error; final browser acceptance pending |
+| Plan displays | skipped agrees in percentage/fill/ARIA; stage timing is a documented wall-clock span; unknown time is omitted; checkpoint completion uses step states | Tests cover out-of-order steps and all-finished needs_input/error; actual compact plan checked in both themes at 390 px |
 
-The candidate reads up to 500 matching recent events and 500 direct children.
+The implementation reads up to 500 matching recent events and 500 direct children.
 Unchanged snapshots and in-flight reads are shared until the relevant thread
 changes. An SDK-harness run with ten separated child notifications measured
 1 timeline, 1 child-list and 20 event reads without a mounted UI (previously
@@ -30,6 +31,23 @@ No arbitrary ownership tree, full historical import, approved Plan Mode import,
 blocking Stop/tool hooks, translations or plugin-specific updater are included.
 Read the release verification record before treating any pending live check as
 passed. Older Claude/Pi event traces are schema evidence, not fresh 0.5.0 tests.
+
+## Release verification (2026-10-30)
+
+- 58 unit, 16 integration and 14 UI tests passed, with typecheck, build and
+  diff checks. Independent review reproduced and closed the realtime regression.
+- Linked backend-to-React checks cover initial empty/nonempty snapshots, removal,
+  completion, a following helper and delayed initial RPCs without remounting.
+- Live Codex native-helper startup and completion updated the open BB composer
+  without remounting. Recorded real events also verify root/helper turn scopes.
+- Local runtime reloaded at `7300bb1`; compact summary and plan were checked in
+  the actual BB composer at 390 px, light/dark themes and reduced motion.
+  Expansion survives overall collapse/reload in the component tests.
+- A Git source snapshot builds with production dependencies only
+  (`npm ci --omit=dev --ignore-scripts`, then `bb plugin build`).
+- Fresh Claude/Pi scenarios were not run: these providers are not registered
+  on this host. Live approval approve/deny/cancel was not exercised; SDK fixtures
+  are not a substitute for that provider-level check.
 
 ## Coverage against the original (audit: 2026-10-30)
 

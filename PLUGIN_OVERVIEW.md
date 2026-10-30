@@ -2,7 +2,7 @@
 
 - A bar above the thread's message box for each task the agent plans: stages as capsules, steps as dots, and a pill at the head naming the current stage and step. Hover the bar to see how long the task has run; hover a mark to see its step and how long it took.
 - Four states with their own colours: working, needs your answer, error, done. On a question or an error the pill shows the agent's note, and an accepted visible human reply or explicit plan operation changes the state.
-- A compact thread-level list of observed delegations and direct child threads, independent of plans. Unknown outcomes are labelled; errors remain visible. Open approval requests in the current thread appear separately.
+- A compact thread-level list of observed delegations and direct child threads, independent of plans. Unknown outcomes are labelled; errors remain visible. Open approval requests in the current thread and direct child threads appear as a general count; incomplete coverage is marked.
 - Click Progress to fold or show the whole block. It remembers your choice for this thread in this browser. Questions and errors remain visible as counts in the summary.
 - Three plans are shown at a time, questions and errors first; Show all opens the rest. The layout adapts to narrow screens.
 - The arrow beside the percent opens the step list. Use … → Hide plan to hide one safely; Hidden plans → Restore brings it back. Hidden plans keep updating; a new question or error brings them back to attention.
@@ -24,7 +24,7 @@ Settings → Plugins → Plan Progress → the gear at the top right: twinkling 
 
 ## Credits
 
-A port of [plan-progress](https://github.com/zycck/claude-mods) by zycck, a mod for Claude Code (MIT): the same tool protocol and the same look, drawn in bb.
+A port of [plan-progress](https://github.com/zycck/claude-mods) by zycck, a mod for Claude Code (MIT): adapted for BB with its own UI and lifecycle handling.
 
 ## Requirements
 

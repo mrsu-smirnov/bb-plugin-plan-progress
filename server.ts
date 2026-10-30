@@ -300,6 +300,8 @@ export default async function plugin(bb: BbPluginApi) {
 
   // Read current timeline and bounded event history; retain a bounded error trace.
   const agentsByThread = new Map<string, Agent[]>();
+  // RPC observation is independent of whether the last snapshot was empty.
+  const observedAgentThreads = new Set<string>();
   const refreshing = new Map<string, boolean>();
   async function listChildren(threadId: string): Promise<ChildThread[]> {
     return cached(threadId, "children", async () => {
@@ -401,7 +403,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
   bb.events.on("experimental_thread.events", ({ thread }) => {
     invalidate(thread.id);
-    if (agentsByThread.has(thread.id)) void refreshAgents(thread.id);
+    if (observedAgentThreads.has(thread.id)) void refreshAgents(thread.id);
     void readBars(thread.id).then(bars => { if (bars.some(bar => bar.state === "needs_input")) void refreshAnswers(thread.id); });
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
@@ -420,15 +422,17 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("thread.failed", ({ thread }) => {
     reminderStates.delete(thread.id);
     invalidate(thread.id);
+    if (observedAgentThreads.has(thread.id)) void refreshAgents(thread.id);
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); } // the strip turns red
   });
   bb.events.on("thread.idle", ({ thread }) => {
     invalidate(thread.id);
-    if (agentsByThread.has(thread.id)) void refreshAgents(thread.id);
+    if (observedAgentThreads.has(thread.id)) void refreshAgents(thread.id);
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("thread.deleted", ({ thread }) => {
     agentsByThread.delete(thread.id);
+    observedAgentThreads.delete(thread.id);
     invalidate(thread.id);
     childSnapshots.delete(thread.id);
     if (thread.parentThreadId) {
@@ -474,9 +478,10 @@ export default async function plugin(bb: BbPluginApi) {
       return { diagnostic: diagnostics.get(threadId) ?? NO_DIAGNOSTIC };
     },
     bars_get: async ({ threadId }) => { await refreshAnswers(threadId); return { bars: await readBars(threadId) }; },
-    agents_get: async ({ threadId }) => ({
-      agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])),
-    }),
+    agents_get: async ({ threadId }) => {
+      observedAgentThreads.add(threadId);
+      return { agents: agentsByThread.get(threadId) ?? (await readAgents(threadId).catch(() => [])) };
+    },
     approvals_get: async ({ threadId }) => {
       let incomplete = false;
       const children = await listChildren(threadId).catch(() => { incomplete = true; return []; });

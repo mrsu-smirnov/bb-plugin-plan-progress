@@ -99,4 +99,3 @@ The earlier comparison did not inspect the complete pinned source. A fresh
 clone at the pinned commit is the evidence for this table.
 A claim of complete parity must be backed by this inventory and scenario
 checks, not by the number of passing tests in the port alone.
-

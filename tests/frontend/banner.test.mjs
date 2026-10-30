@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { JSDOM } from "jsdom";
+import { execFileSync } from "node:child_process";
 import { build } from "esbuild";
 import { applyOp, setVisibility } from "../../engine.ts";
 
@@ -241,4 +242,50 @@ test('no plans does not claim hidden plans and collapsed summary retains agent e
     assert.equal(slot.queryByText('Failed task'),null);
     assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/Thread agents · 1.*1 errors.*0 unknown/);
   } finally {slot.unmount();}
+});
+
+
+test('connected server pushes empty to running, completion, empty and a later helper without remount', async () => {
+  execFileSync('bb',['plugin','build'],{stdio:'pipe'});
+  const {createFakePluginHost}=await import('@get-bb/plugin-sdk/testing');
+  const {default:plugin}=await import('../../dist/server.js');
+  localStorage.clear(); let rows=[]; let reads=0;
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    timeline:async()=>{reads++;return {rows,activeBackgroundCommands:[]};}, list:async()=>[],
+    events:{list:async()=>[]},interactions:{list:async()=>[]},
+  }}});
+  await plugin(bb);
+  const slot=renderSlot(banner,{}, {context:{threadId:'root',projectId:null},settings:{autoClose:false,effects:false},
+    rpc:Object.fromEntries(['bars_get','agents_get','approvals_get','diagnostics_get'].map(name=>[name,args=>h.callRpc(name,args)]))});
+  let cursor=0;
+  const push = async (type='experimental_thread.events', changed=true) => {
+    const start=h.realtimeSignals.length;
+    await h.emitThreadEvent(type,{thread:{id:'root'}});
+    if (changed) await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(signal=>signal.channel==='agents-changed'), `missing agents signal after ${type}, ${rows[0]?.status ?? 'empty'}`));
+    else await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});
+    const signals=h.realtimeSignals.slice(cursor);cursor=h.realtimeSignals.length;
+    for (const signal of signals) await slot.emitRealtime(signal.channel,signal.payload);
+  };
+  const at=Date.now();
+  const row=(id,name,status,start,end=null)=>({kind:'work',workKind:'delegation',callId:id,background:false,status,startedAt:start,completedAt:end,description:name});
+  try {
+    await waitFor(()=>assert.equal(reads,1));
+    await act(async()=>{});
+    assert.equal(slot.queryByLabelText('Thread agents'),null);
+    rows=[row('first','First helper','pending',at)];await push();await slot.findByText('First helper');
+    rows=[row('first','First helper','completed',at,at+1)];await push('thread.idle');
+    await waitFor(()=>assert.ok(slot.getByText('Done')));
+    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('First helper'),null));
+    rows=[row('second','Second helper','pending',at+2)];await push();await slot.findByText('Second helper');
+    rows=[row('second','Second helper','error',at+2,at+3)];await push('thread.failed');
+    await waitFor(()=>assert.ok(slot.getByText('Error')));
+    // An error trace deliberately survives an empty source. A proven newer run
+    // supersedes it; after that completion, an empty source may clear the list.
+    rows=[];await push('experimental_thread.events',false);assert.ok(slot.getByText('Second helper'));
+    rows=[row('second','Second helper','pending',at+4)];await push();
+    rows=[row('second','Second helper','completed',at+4,at+5)];await push('thread.idle');
+    await waitFor(()=>assert.ok(slot.getByText('Done')));
+    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('Second helper'),null));
+    rows=[row('third','Third helper','pending',at+6)];await push();await slot.findByText('Third helper');
+  } finally {slot.unmount();await h.dispose();}
 });

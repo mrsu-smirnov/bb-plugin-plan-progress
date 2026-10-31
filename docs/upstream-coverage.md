@@ -8,7 +8,8 @@ available as a current document instead of relying on old Git history.
 
 The candidate adds scope-aware routing/reminders, observed failure outcomes,
 durable root-turn reminder attempts, bounded evidence and native/CLI observations
-in diagnose, common auto-hide conditions, and a tap/click explanation in the UI.
+in diagnose, and common auto-hide conditions. Appearance rules are explained in
+the README and settings; the banner has no help block.
 No Plan Mode import, blocking hooks or invocation deduplication is claimed.
 
 Independent review reproduced and closed late-turn reminder rearming and
@@ -29,14 +30,15 @@ snapshot. Server auto-hide eligibility is not proof of any browser's visibility.
 | Claude Code | Not freshly run | Installed provider is disabled; no account/session change made |
 | ACP OpenCode / opencode-go/claude-haiku-5-5 | Three ordinary tasks completed plans; CLI fallback and explicit native execution, waiting and stop/resume tested | Model sometimes chooses CLI first; native tool discovery and packet execution differ from v2 |
 
-Candidate verification on 2026-10-31: 67 unit, 24 integration and 15 UI checks
+Candidate verification on 2026-10-31: 67 unit, 24 integration and 14 UI checks
 passed, along with typecheck/build/diff checks. Independent Astra review found
 no remaining blockers in the reviewed code after three narrow corrections.
 Native invalid-step rejection, needs_input and continuation after a visible
 browser-submitted reply were also exercised on both available connections;
 the intermediate automatic running transition was not captured separately.
-The tap-open explanation was inspected in actual BB, including 390 px; narrow
-light/dark plan layouts were inspected. Existing auto-close=true/60s and other
+Narrow light/dark plan layouts were inspected. An initial tap-open help block
+was removed after feedback because it took too much space; its obsolete UI test
+was removed too. The explanation remains in README/settings. Existing auto-close=true/60s and other
 saved settings remained intact. In existing test threads, changing Codex from
 Sol to gpt-6-luna and OpenCode v2 from Go Claude Haiku to opencode-go/gpt-6-luna
 preserved plans and allowed native calls. Both were forcibly stopped during a

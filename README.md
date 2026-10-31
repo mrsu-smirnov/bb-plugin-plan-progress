@@ -78,9 +78,10 @@ with the settings file unchanged.
 
 The agent creates the bar by calling BB's tool; the plugin does not infer every
 user task. The standing rule is three or more actions, including reads. Short
-answers and conversation need no bar. **About progress** in the banner explains
-this by click/tap. The same rule applies regardless of model, but model compliance
-is measured separately from tool availability and execution.
+answers and conversation need no bar. The explanation stays here and in plugin
+settings so the progress banner remains compact. The same rule applies regardless
+of model, but model compliance is measured separately from tool availability and
+execution.
 
 `bb plan-progress diagnose --json` now reports provider identity when readable,
 the last requested model (not a guarantee of the active session model), recognized

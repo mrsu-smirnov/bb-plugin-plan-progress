@@ -848,12 +848,6 @@ function Banner() {
         {collapsed && hidden.length > 0 && <span>{hidden.length} hidden</span>}
         {collapsed && allAgents.length > 0 && <span>Thread agents · {allAgents.length} · {allAgents.filter(a => a.state === "running").length} running · {allAgents.filter(a => a.state === "error").length} errors · {allAgents.filter(a => a.state === "unknown").length} unknown</span>}
       </button>
-      <details className="px-3 py-1 text-xs text-muted-foreground">
-        <summary className="min-h-8 cursor-pointer py-2">About progress</summary>
-        <p className="pb-2">The agent is instructed to create a plan before tasks with three or more actions, including reading files, and update it as it works. Short answers and conversation do not require a plan. The model must call the progress tool; the plugin does not infer every task.</p>
-        <p className="pb-2">An idle thread can still have an open plan. A completed plan auto-hides only when auto-close is on, its delay has passed and no tracked helpers are running. A restored finish stays visible. Hiding a plan does not stop work.</p>
-        <p className="pb-2">Settings: BB Settings → Plugins → Plan Progress → Configuration. For observed states and auto-hide conditions, ask your agent to run bb plan-progress diagnose. An accepted new message resumes waiting plans; it does not prove that every question was answered.</p>
-      </details>
       {(approvals.count > 0 || approvals.incomplete) && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals.count} open approval {approvals.count === 1 ? "request" : "requests"} in this thread and its direct children{approvals.incomplete ? " · some approvals could not be checked" : ""}</div>}
       {!collapsed && allAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
       {!collapsed && <div id={controls}>

@@ -108,9 +108,9 @@ not-attempted, unknown, sent, send-error and skipped; sent is not proof the mode
 followed it. It never starts a follow-up turn. This improves compliance rather
 than guaranteeing it.
 
-About progress opens by click/tap in the banner; the rule also appears in the
-README so it is available before the first bar. An idle thread need not have a
-completed plan. Auto-hide conditions from diagnose describe server observations,
+The appearance rule is explained in the README and settings, including before
+the first bar. Keep the progress banner compact, without a help section.
+An idle thread need not have a completed plan. Auto-hide conditions from diagnose describe server observations,
 not the actual state of every browser. A visible accepted new human message can
 resume several waiting plans; it does not prove each question was answered.
 

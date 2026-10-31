@@ -36,9 +36,15 @@ browser-submitted reply were also exercised on both available connections;
 the intermediate automatic running transition was not captured separately.
 The tap-open explanation was inspected in actual BB, including 390 px; narrow
 light/dark plan layouts were inspected. Existing auto-close=true/60s and other
-saved settings remained intact. Fresh live approval grant/deny/cancel, forced
-stop/retry, model switching and Pi/Claude coverage remain unverified; harness
-cases do not substitute for those provider-level runs.
+saved settings remained intact. In existing test threads, changing Codex from
+Sol to gpt-6-luna and OpenCode v2 from Go Claude Haiku to opencode-go/gpt-6-luna
+preserved plans and allowed native calls. Both were forcibly stopped during a
+controlled pause: the thread went idle while the plan correctly stayed running,
+then an explicit follow-up completed it. This tests interruption/resumption,
+not automatic provider retry. Fresh live approval grant/deny/cancel, automatic
+provider retry and Pi/Claude coverage remain unverified; harness cases do not
+substitute for those provider-level runs. A clean Git snapshot also built with
+production dependencies only (npm ci --omit=dev --ignore-scripts, bb plugin build).
 
 ### External acceptance before claiming a connection is tested
 

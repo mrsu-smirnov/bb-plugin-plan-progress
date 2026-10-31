@@ -1,4 +1,4 @@
-import { isMainEvent, progressSource } from "./diagnostics.ts";
+import { isMainEvent, progressSource, progressOutcome } from "./diagnostics.ts";
 
 export interface ReminderState {
   since: number;
@@ -43,8 +43,7 @@ export function observeWork(state: ReminderState, events: unknown[]): boolean {
     if (row.type === "turn/completed") { state.finished = true; continue; }
     const source = progressSource(row);
     if (source === "bb") {
-      const item = row.data?.item;
-      if (item?.status !== "failed" && item?.result?.isError !== true) {
+      if (progressOutcome(row) === "completed") {
         state.hasPlan = true; state.sinceUpdate = 0;
       }
       continue;

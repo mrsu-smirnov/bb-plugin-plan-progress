@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { newReminderState, observeWork } from "../reminders.ts";
 const work = seq => ({ seq, createdAt: 100, type: "item/completed", data: { item: { type: "fileRead" } } });
-const progress = seq => ({ ...work(seq), data: { item: { type: "toolCall", server: "bb", tool: "plan_progress" } } });
+const progress = seq => ({ ...work(seq), data: { item: { type: "toolCall", server: "bb", tool: "plan_progress", status: "completed" } } });
 
 test("only multiple current-turn work calls trigger the missing-plan reminder", () => {
   const state = newReminderState(100);
@@ -64,4 +64,13 @@ test('saved due state cannot send from a different bounded turn without a root s
   assert.equal(state.rootConfirmed,false);
   assert.equal(observeWork(JSON.parse(JSON.stringify(state)),[row(103,'a')]),false);
   assert.equal(observeWork(state,[row(104,'c','turn/started'),row(105,'c'),row(106,'c'),row(107,'c')]),true);
+});
+
+test('failed or truncated ACP progress batches do not reset the stale-work count', () => {
+  const state=newReminderState(0);state.hasPlan=true;state.sinceUpdate=5;
+  const row={seq:1,createdAt:100,type:'item/completed',data:{item:{type:'toolCall',tool:'execute',server:'bb',status:'completed',
+    result:{metadata:{truncated:false,toolCalls:[{tool:'bb-bridge.plan_progress',status:'error'}]}}}}};
+  assert.equal(observeWork(state,[row]),false);assert.equal(state.sinceUpdate,5);
+  row.seq=2;row.data.item.result.metadata.truncated=true;row.data.item.result.metadata.toolCalls[0].status='completed';
+  observeWork(state,[row]);assert.equal(state.sinceUpdate,5);
 });

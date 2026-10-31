@@ -87,7 +87,8 @@ the last requested model (not a guarantee of the active session model), recogniz
 call outcome, the last native/CLI execution observed by this plugin runtime,
 reminder delivery, bounded-history coverage, and each plan's state, finished-step
 count and auto-hide conditions. It never sends a reminder itself. Unknown or
-unavailable evidence stays unknown. Reports omit conversation text, commands and
+unavailable evidence stays unknown. ACP packet diagnostics follow the last matching inner call, not a successful
+code wrapper; truncated packets remain unknown. Reports omit conversation text, commands and
 tool arguments. The report is an observation assembled from several reads, not
 an atomic snapshot or proof of a missing tool.
 
@@ -110,10 +111,11 @@ is lost, inspect `bb plan-progress show --json` once, then update uniquely named
 steps. Reloading a browser, reloading a plugin and recreating a provider session
 are different operations: tools/instructions change only at session boundaries.
 
-Live candidate observations cover Codex `gpt-6.1-sol` and OpenCode v2
-`opencode-go/claude-haiku-5-5` using existing connections. This is not validation
-of every model or subscription. Pi/Ollama Cloud, Pi/OpenRouter and fresh Claude
-Code remain unverified on this host. The exact models used by the external tester
+Live candidate observations cover Codex `gpt-6.1-sol`, OpenCode v2 and ACP
+OpenCode `opencode-go/claude-haiku-5-5`, and Pi 1.4.0 through OpenRouter
+(`anthropic/claude-haiku-5.5`, plus `openai/gpt-6-luna`). Existing connections were
+used. This is not validation of every model or subscription. Pi/Ollama Cloud and
+fresh Claude Code remain unverified here. The exact models used by the external tester
 are still unknown. See [verification and limitations](docs/upstream-coverage.md).
 
 ### Answer speed
@@ -195,8 +197,9 @@ accepted by the provider clears an older waiting state; hidden agent-only input,
 system messages, other agents and retries do not. An explicit plan op also
 changes the state. Matching uses request IDs and request timestamps; bounded
 event reads and timestamps mean very old or indistinguishable events cannot
-be proved. Live event evidence for the new Claude and Pi scenarios is still
-needed; those providers are not currently registered on the test host. The
+be proved. Fresh Claude and Pi-helper lifecycle evidence remains incomplete;
+the candidate verification table distinguishes later Pi basic-flow checks from
+the original 0.5.0 acceptance. The
 prior 0.4.0 audit is preserved in [the coverage inventory](docs/upstream-coverage.md). This is a partial port of
 pinned upstream `b77335ee560c609d67ae85c7321f886719361426`.
 

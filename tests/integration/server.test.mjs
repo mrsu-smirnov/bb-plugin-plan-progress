@@ -457,3 +457,15 @@ test('old send completion after plugin reload cannot overwrite the new generatio
     assert.equal(report.reminder.delivery,'unknown');assert.equal(report.reminder.sent,true);
   }finally{await current.dispose();}
 });
+
+test('ACP caught inner failure remains failed in the public diagnostic', async () => {
+  const row={seq:60,createdAt:100,type:'item/completed',scope:{kind:'turn',turnId:'root'},data:{item:{
+    type:'toolCall',tool:'plan_progress',server:'bb',status:'completed',result:{metadata:{truncated:false,toolCalls:[
+      {tool:'bb-bridge.plan_progress',status:'completed'}, {tool:'bb-bridge.plan_progress',status:'error'}]}}}}};
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    events:{list:async args=>Number(args.afterSeq??0)<60?[row]:[]},
+  }}});
+  try{await plugin(bb);const report=await h.callRpc('diagnostics_get',{threadId:'thread-test'});
+    assert.equal(report.diagnostic.source,'bb');assert.equal(report.diagnostic.lastOutcome,'failed');
+  }finally{await h.dispose();}
+});

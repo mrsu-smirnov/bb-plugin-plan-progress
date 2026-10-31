@@ -88,7 +88,8 @@ direct child threads, even without a plan. Three rows are shown by default;
 expansion is saved per browser and thread. Confirmed errors and unknown outcomes
 remain visible while present in the source. Open approvals in the current
 thread and its direct children are counted without assigning them to an agent.
-New provider event handling still needs live validation for Claude and Pi.
+Fresh Claude and Pi-helper lifecycle coverage remains incomplete; see the
+candidate verification table for the later Pi basic-flow checks.
 
 ## Coexistence with Claude Desktop
 
@@ -113,6 +114,8 @@ completed plan. Auto-hide conditions from diagnose describe server observations,
 not the actual state of every browser. A visible accepted new human message can
 resume several waiting plans; it does not prove each question was answered.
 
-Fresh candidate checks cover Codex and OpenCode v2/Go Claude Haiku only. Pi with
-Ollama Cloud/OpenRouter and fresh Claude Code need external live acceptance;
-do not infer support for all models from one provider's successful run.
+Fresh candidate checks cover Codex, OpenCode v2 and ACP/Go Claude Haiku, and
+Pi 1.4.0/OpenRouter Haiku 5.5 plus Luna. Pi/Ollama Cloud and fresh Claude Code
+remain unverified. ACP can wrap several native calls into one code record:
+diagnose uses the last matching inner outcome; truncated metadata remains
+unknown. Do not infer all-model support from these successful runs.

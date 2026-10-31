@@ -44,3 +44,17 @@ test('a failed native progress call with plugin presentation is recognized witho
   assert.equal(progressSource(row),'bb');
   assert.equal(advanceDiagnostic(NO_DIAGNOSTIC,[row]).lastOutcome,'failed');
 });
+
+test('ACP batch outcome follows the last progress call, not the successful code wrapper', () => {
+  const row=call(60,'bb');row.data.item.tool='execute';row.data.item.status='completed';
+  row.data.item.result={metadata:{truncated:false,toolCalls:[
+    {tool:'bb-bridge.plan_progress',status:'completed'},
+    {tool:'bb-bridge.plan_progress',status:'error'},
+    {tool:'other.read',status:'completed'},
+  ]}};
+  assert.equal(progressSource(row),'bb');
+  assert.equal(advanceDiagnostic(NO_DIAGNOSTIC,[row]).lastOutcome,'failed');
+  row.data.item.result.metadata.truncated=true;
+  assert.equal(advanceDiagnostic(NO_DIAGNOSTIC,[row]).lastOutcome,'unknown');
+  row.scope={kind:'agent',agentId:'helper'};assert.equal(progressSource(row),null);
+});

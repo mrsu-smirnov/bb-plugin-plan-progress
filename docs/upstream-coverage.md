@@ -23,12 +23,13 @@ snapshot. Server auto-hide eligibility is not proof of any browser's visibility.
 | --- | --- | --- |
 | Codex / gpt-6.1-sol, medium | Three independent ordinary read-only tasks created and completed native plans without a progress request | Existing connection, one model; no inference about all accounts/models |
 | OpenCode v2 / opencode-go/claude-haiku-5-5 | Three independent ordinary read-only tasks created and completed native plans | A run attempted an unavailable invented tool and recovered; model compliance is separate from engine execution |
-| Pi / Ollama Cloud | Not run | Provider unavailable on the test host; tester's exact model unknown |
-| Pi / OpenRouter | Not run | Provider unavailable on the test host; tester's exact model unknown |
-| Claude Code | Not freshly run | Provider unavailable on this host; old evidence does not validate this candidate |
-| ACP OpenCode | Not run | Listing/installation does not validate a different bridge |
+| Pi / Ollama Cloud | Not run | Pi is available, but no Ollama Cloud connection is configured here |
+| Pi 1.4.0 / OpenRouter / anthropic/claude-haiku-5.5 | Three ordinary tasks completed native plans; invalid-step rejection and waiting tested | Tool starts precede reads, but parallel read completion can precede the plan response |
+| Pi / OpenRouter / openai/gpt-6-luna | Additional ordinary task completed a native plan; existing-thread model switch, stop and resume tested | One model change and interruption run, not a full matrix of models |
+| Claude Code | Not freshly run | Installed provider is disabled; no account/session change made |
+| ACP OpenCode / opencode-go/claude-haiku-5-5 | Three ordinary tasks completed plans; CLI fallback and explicit native execution, waiting and stop/resume tested | Model sometimes chooses CLI first; native tool discovery and packet execution differ from v2 |
 
-Candidate verification on 2026-10-31: 65 unit, 23 integration and 15 UI checks
+Candidate verification on 2026-10-31: 67 unit, 24 integration and 15 UI checks
 passed, along with typecheck/build/diff checks. Independent Astra review found
 no remaining blockers in the reviewed code after three narrow corrections.
 Native invalid-step rejection, needs_input and continuation after a visible
@@ -42,9 +43,20 @@ preserved plans and allowed native calls. Both were forcibly stopped during a
 controlled pause: the thread went idle while the plan correctly stayed running,
 then an explicit follow-up completed it. This tests interruption/resumption,
 not automatic provider retry. Fresh live approval grant/deny/cancel, automatic
-provider retry and Pi/Claude coverage remain unverified; harness cases do not
+provider retry, Pi/Ollama Cloud and fresh Claude Code remain unverified; harness cases do not
 substitute for those provider-level runs. A clean Git snapshot also built with
 production dependencies only (npm ci --omit=dev --ignore-scripts, bb plugin build).
+
+Additional local acceptance found Pi installed and enabled with an existing
+OpenRouter connection. Earlier statements that Pi was unavailable must not be
+read as a current installation diagnosis. No provider was enabled and no
+credentials were added for these tests. An ACP record contains caught inner
+progress errors inside an otherwise completed code wrapper. Diagnostics now
+follow the last matching inner progress call; truncated evidence stays unknown,
+and failed/unknown batches do not reset the reminder counter. This shape is
+covered by unit and SDK regression tests and reviewed independently by Astra.
+Safe printf and Python commands in an ACP accept-edits test ran without any
+pending interaction; this does **not** validate live approval grant/deny/cancel.
 
 ### External acceptance before claiming a connection is tested
 

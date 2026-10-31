@@ -23,6 +23,8 @@ import { acceptedHumanRequests, latestChildRun, backgroundEvidence, type Evidenc
 import { hostContract } from "./host-contract";
 import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
 import { newReminderState, observeWork, type ReminderState } from "./reminders";
+import { visibilityReason } from "./presentation";
+import { version as pluginVersion } from "./package.json";
 
 export type { Bar } from "./engine";
 export type { Agent } from "./agents";
@@ -76,7 +78,7 @@ const opSchema = z.object({
   active: z
     .string()
     .optional()
-    .describe("Step title to make current; earlier steps count as done."),
+    .describe("Step title to make current; only previously active steps before it become done."),
   failed: z.string().optional().describe("Step title that failed; add a note."),
   note: z.string().optional(),
   state: z.enum(STATE_NAMES).optional().describe('"needs_input" before asking the user; "done" when finished.'),
@@ -90,6 +92,7 @@ const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress t
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
 - Before asking the user a question: {id, state:"needs_input", note}; an accepted human answer clears it; an explicit op also resumes. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
 - When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
+- If a call result is lost, do not blindly repeat next:true: it advances again. Read bb plan-progress show --json once, then update named steps using done/active. Never invent tool names.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.
 - The result already says done/total, state and the active step; do not call it just to check.
 Skip it for one-step answers and conversation.`;
@@ -100,7 +103,7 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     automaticReminders: {
       type: "boolean", label: "Automatic progress reminders",
-      description: "At most one reminder per active turn after 3 work calls without a bar or 6 without an update. Never starts a new turn.",
+      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update. Missing history can suppress it. Never starts a new turn.",
       default: true,
     },
     isolateClaude: {
@@ -122,13 +125,13 @@ export default async function plugin(bb: BbPluginApi) {
     autoClose: {
       type: "boolean",
       label: "Auto-close",
-      description: "Hide finished plans automatically. You can restore them from Hidden plans.",
+      description: "Hide done plans after the delay and tracked helpers finish; idle alone does not finish a plan. The agent creates plans for tasks with 3+ actions. Restore from Hidden plans.",
       default: true,
     },
     autoCloseSeconds: {
       type: "select",
       label: "Stays for",
-      description: "How long a finished bar stays when auto-close is on.",
+      description: "Delay before hiding a finished plan when auto-close is on and tracked helpers have stopped. A restored finish stays visible.",
       options: ["10", "30", "60"],
       experimental_optionLabels: { "10": "10 s", "30": "30 s", "60": "60 s" },
       default: "30",
@@ -160,44 +163,113 @@ export default async function plugin(bb: BbPluginApi) {
   const diagnosticCursors = new Map<string, number>();
   const diagnosticPulls = new Map<string, Promise<void>>();
   const reminderStates = new Map<string, ReminderState>();
-  async function refreshDiagnostic(threadId: string): Promise<void> {
+  const activeThreads = new Set<string>();
+  // Observation only; event history supplies call evidence after plugin reload.
+  const lastOperations = new Map<string, {at: number; route: "native" | "cli"; ok: boolean | null}>();
+  const diagnosticDirty = new Map<string, boolean>();
+  const deletedThreads = new Set<string>();
+  let disposed = false;
+  const live = (id: string) => !disposed && !deletedThreads.has(id);
+  bb.onDispose(async () => {
+    disposed = true;
+    // Finish already-enqueued storage work before another generation starts.
+    await Promise.allSettled([...queues.values()]);
+  });
+  const history = new Map<string, {fromSeq: number | null; throughSeq: number; initialWindowLimited: boolean; caughtUp: boolean; readFailed: boolean}>();
+  const reminderKey = (id: string) => `reminder-v06:${id}`;
+  async function reminderFor(threadId: string): Promise<ReminderState> {
+    let state = reminderStates.get(threadId);
+    if (!state) {
+      const saved = await bb.storage.kv.get<ReminderState>(reminderKey(threadId));
+      state = saved ?? newReminderState(0);
+      reminderStates.set(threadId, state);
+    }
+    return state;
+  }
+  async function persistReminder(threadId: string, reminder: ReminderState): Promise<boolean> {
+    return serial(threadId, async () => {
+      if (!live(threadId)) return false;
+      await bb.storage.kv.set(reminderKey(threadId), {...reminder});
+      return true;
+    });
+  }
+  async function refreshDiagnostic(threadId: string, allowSend = false): Promise<void> {
+    if (!live(threadId)) return;
     const busy = diagnosticPulls.get(threadId);
-    if (busy) return busy;
+    if (busy) { diagnosticDirty.set(threadId, (diagnosticDirty.get(threadId) ?? false) || allowSend); return busy; }
     const run = (async () => {
+      const reminder = await reminderFor(threadId);
       let cursor = diagnosticCursors.get(threadId);
-      let previous = diagnostics.get(threadId) ?? NO_DIAGNOSTIC;
+      const initial = cursor === undefined;
+      const rows: EvidenceEvent[] = [];
+      let initialWindowLimited = false;
+      let caughtUp = false;
       for (let page = 0; page < 5; page++) {
-        const events = await bb.sdk.threads.events.list({ threadId, types: ["item/completed"], limit: "100",
-          ...(cursor === undefined ? { order: "desc" as const } : { afterSeq: String(cursor) }) });
-        const ordered = cursor === undefined ? [...events].reverse() : events;
-        const reminder = reminderStates.get(threadId);
-        if (reminder && observeWork(reminder, ordered) && (await settings.get()).automaticReminders) {
-          // Set before awaiting: never send twice, even on failure. Strict `steer`
-          // rejects an idle target instead of creating a follow-up turn.
-          reminder.sent = true;
-          const bars = await readBars(threadId);
-          const updatedThisTurn = bars.some(bar => bar.updatedAt >= reminder.since);
-          if (!updatedThisTurn || bars.some(bar => bar.state === "running")) {
-            await bb.sdk.threads.send({ threadId, mode: "steer", input: [{ type: "text", visibility: "agent-only", mentions: [],
-              text: "BB plan-progress automatic reminder: several work calls have run. Create or update BB's plan_progress bar now for the remaining work (Claude: mcp__bb-bridge__plan_progress). A bar is UI bookkeeping, not a subagent or file edit. If the task is already finished, do not invent a plan retroactively. Do not repeat completed work. If the tool is unavailable, report that once." }],
-            }).catch(() => undefined);
-          }
-        }
-        const next = advanceDiagnostic(previous, ordered);
-        if (next !== previous) {
-          diagnostics.set(threadId, next);
-          if (next.warning && previous.source !== next.source) bb.log.warn(`Progress tool collision in ${threadId}`);
-          previous = next;
-          bb.realtime.publish(DIAGNOSTICS_CHANGED, { threadId });
-        }
-        const initial = cursor === undefined;
+        const events = await bb.sdk.threads.events.list({ threadId,
+          types: ["item/completed", "turn/started", "turn/completed"], limit: "100",
+          ...(cursor === undefined ? {order: "desc" as const} : {afterSeq: String(cursor)}) });
+        if (!live(threadId)) return;
+        const first = cursor === undefined;
+        const ordered = first ? [...events].reverse() : events;
+        rows.push(...ordered as EvidenceEvent[]);
+        if (first) initialWindowLimited = events.length >= 100;
         cursor = Math.max(cursor ?? 0, ...events.map(event => event.seq));
-        diagnosticCursors.set(threadId, cursor);
-        if (initial || events.length < 100) break;
+        // The initial request selects the latest window; incremental reads
+        // must reach its tail before they can justify sending a reminder.
+        if (first || events.length < 100) { caughtUp = true; break; }
       }
-    })().catch(error => bb.log.warn(`Progress diagnostics failed for ${threadId}: ${String(error)}`));
+      if (!live(threadId)) return;
+      const before = JSON.stringify(reminder);
+      const due = observeWork(reminder, rows);
+      const covered = history.get(threadId);
+      history.set(threadId, {fromSeq: covered?.fromSeq ?? rows[0]?.seq ?? null,
+        throughSeq: cursor ?? 0, initialWindowLimited: initial ? initialWindowLimited : covered?.initialWindowLimited ?? true,
+        caughtUp, readFailed: false});
+      if (due && caughtUp && allowSend && activeThreads.has(threadId) && (await settings.get()).automaticReminders) {
+        if (!live(threadId)) return;
+        const bars = await readBars(threadId);
+        if (!live(threadId)) return;
+        const updatedThisTurn = bars.some(bar => bar.updatedAt >= reminder.since);
+        reminder.sent = true;
+        reminder.delivery = "skipped";
+        if (!updatedThisTurn || bars.some(bar => bar.state === "running")) {
+          reminder.delivery = "unknown";
+          reminder.attemptedAt = Date.now();
+          if (!await persistReminder(threadId, reminder) || !live(threadId)) return;
+          try {
+            const delivered = await bb.sdk.threads.send({threadId, mode: "steer", input: [{type: "text",
+              visibility: "agent-only", mentions: [],
+              text: "BB plan-progress automatic reminder: several work calls have run. Create or update BB's plan_progress bar now for the remaining work (Claude: mcp__bb-bridge__plan_progress). A bar is UI bookkeeping, not a subagent or file edit. If the task is already finished, do not invent a plan retroactively. Do not repeat completed work. If the tool is unavailable, report that once."}]});
+            if (!live(threadId)) return;
+            reminder.delivery = delivered.delivery === "sent" ? "sent" : "unknown";
+          } catch { if (!live(threadId)) return; reminder.delivery = "send-error"; }
+        }
+      }
+      if (!live(threadId)) return;
+      if (JSON.stringify(reminder) !== before && !await persistReminder(threadId, reminder)) return;
+      if (!live(threadId)) return;
+      const previous = diagnostics.get(threadId) ?? NO_DIAGNOSTIC;
+      const next = advanceDiagnostic(previous, rows);
+      if (next !== previous) {
+        diagnostics.set(threadId, next);
+        if (next.warning && previous.source !== next.source) bb.log.warn(`Progress tool collision in ${threadId}`);
+        bb.realtime.publish(DIAGNOSTICS_CHANGED, {threadId});
+      }
+      diagnosticCursors.set(threadId, cursor ?? 0);
+    })().catch(error => {
+      if (!live(threadId)) return;
+      const old = history.get(threadId);
+      history.set(threadId, {fromSeq: old?.fromSeq ?? null, throughSeq: old?.throughSeq ?? 0,
+        initialWindowLimited: old?.initialWindowLimited ?? true, caughtUp: false, readFailed: true});
+      bb.log.warn(`Progress diagnostics failed for ${threadId}: ${String(error)}`);
+    });
     diagnosticPulls.set(threadId, run);
     try { await run; } finally { diagnosticPulls.delete(threadId); }
+    if (diagnosticDirty.has(threadId)) {
+      const againMaySend = diagnosticDirty.get(threadId)!;
+      diagnosticDirty.delete(threadId);
+      await refreshDiagnostic(threadId, againMaySend);
+    }
   }
 
   async function readBars(threadId: string): Promise<Bar[]> {
@@ -227,11 +299,16 @@ export default async function plugin(bb: BbPluginApi) {
     return run;
   }
 
-  async function apply(threadId: string, op: Op): Promise<{ ok: boolean; text: string }> {
+  async function apply(threadId: string, op: Op, route: "native" | "cli" = "native"): Promise<{ ok: boolean; text: string }> {
     return serial(threadId, async () => {
       const result = applyOp(await readBars(threadId), op, Date.now());
-      if (!result.ok) return { ok: false, text: result.error };
+      if (!result.ok) {
+        lastOperations.set(threadId, {at: Date.now(), route, ok: false});
+        return { ok: false, text: result.error };
+      }
+      lastOperations.set(threadId, {at: Date.now(), route, ok: null});
       await writeBars(threadId, result.bars);
+      lastOperations.set(threadId, {at: Date.now(), route, ok: true});
       diagnostics.set(threadId, { source: "bb", lastCallSeq: diagnostics.get(threadId)?.lastCallSeq ?? 0, warning: null });
       const reminder = reminderStates.get(threadId);
       if (reminder) { reminder.hasPlan = true; reminder.sinceUpdate = 0; }
@@ -407,7 +484,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("experimental_thread.events", ({ thread }) => {
-    if (reminderStates.has(thread.id) || diagnostics.has(thread.id)) void refreshDiagnostic(thread.id);
+    if (thread.status === "active") activeThreads.add(thread.id);
+    else if (thread.status) activeThreads.delete(thread.id);
+    if (activeThreads.has(thread.id) || reminderStates.has(thread.id) || diagnostics.has(thread.id)) void refreshDiagnostic(thread.id, true);
     bb.realtime.publish("approvals-changed", { threadId: thread.id });
     if (thread.parentThreadId) bb.realtime.publish("approvals-changed", { threadId: thread.parentThreadId });
   });
@@ -417,9 +496,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (thread.parentThreadId) bb.realtime.publish("approvals-changed", { threadId: thread.parentThreadId });
   });
   bb.events.on("thread.idle", ({ thread }) => void refreshDiagnostic(thread.id));
-  bb.events.on("thread.idle", ({ thread }) => { reminderStates.delete(thread.id); });
+  bb.events.on("thread.idle", ({ thread }) => { activeThreads.delete(thread.id); });
   bb.events.on("thread.failed", ({ thread }) => {
-    reminderStates.delete(thread.id);
+    activeThreads.delete(thread.id);
     invalidate(thread.id);
     if (observedAgentThreads.has(thread.id)) void refreshAgents(thread.id);
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); } // the strip turns red
@@ -430,6 +509,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("thread.deleted", ({ thread }) => {
+    deletedThreads.add(thread.id);
     agentsByThread.delete(thread.id);
     observedAgentThreads.delete(thread.id);
     invalidate(thread.id);
@@ -442,13 +522,55 @@ export default async function plugin(bb: BbPluginApi) {
     diagnostics.delete(thread.id);
     diagnosticCursors.delete(thread.id);
     reminderStates.delete(thread.id);
-    void serial(thread.id, () => writeBars(thread.id, []));
+    activeThreads.delete(thread.id);
+    history.delete(thread.id);
+    diagnosticDirty.delete(thread.id);
+    lastOperations.delete(thread.id);
+    void serial(thread.id, async () => {
+      await bb.storage.kv.delete(reminderKey(thread.id));
+      await writeBars(thread.id, []);
+    });
   });
   // Activation alone does not establish that a human answered.
   bb.events.on("thread.active", ({ thread }) => {
-    reminderStates.set(thread.id, newReminderState(Date.now()));
-
+    activeThreads.add(thread.id);
+    void refreshDiagnostic(thread.id, true);
   });
+
+  async function diagnosticReport(threadId: string) {
+    let thread: Awaited<ReturnType<typeof bb.sdk.threads.get>> | null = null;
+    try { thread = await bb.sdk.threads.get({threadId}); } catch { /* unknown, never infer availability */ }
+    await refreshDiagnostic(threadId);
+    const [config, bars, recent] = await Promise.all([
+      settings.get(), readBars(threadId),
+      recentEvents(threadId, ["client/turn/requested"]).catch(() => []),
+    ]);
+    const agents = await readAgents(threadId).catch(() => null);
+    const request = recent.filter(event => event.data?.execution?.model &&
+      (!event.scope || event.scope.kind === "thread")).sort((a,b) => b.seq - a.seq)[0];
+    const now = Date.now();
+    return {
+      pluginVersion, threadId, providerId: thread?.providerId ?? null,
+      threadStatus: thread?.status ?? null,
+      lastRequestedModel: typeof request?.data?.execution?.model === "string" ? request.data.execution.model : null,
+      modelEvidence: "last client request, not proof of active session model",
+      nativeToolAvailability: "unknown; observed calls are reported separately",
+      isolateClaude: config.isolateClaude, bars: bars.length,
+      ...(diagnostics.get(threadId) ?? NO_DIAGNOSTIC), lastOperation: lastOperations.get(threadId) ?? null,
+      lastOperationScope: "observed in this plugin runtime; event evidence may cover earlier calls",
+      reminder: reminderStates.get(threadId) ?? newReminderState(0),
+      reminderRootEvidence: reminderStates.get(threadId)?.turnId == null ? "unknown or legacy unscoped" :
+        reminderStates.get(threadId)?.rootConfirmed ? "observed-root-start" : "root-mismatch; sending suppressed",
+      history: {...(history.get(threadId) ?? {fromSeq: null, throughSeq: 0, initialWindowLimited: true, caughtUp: false, readFailed: true}),
+        scope: "recent-window", initialLimit: 100, incrementalLimit: 500},
+      snapshotAt: now, settings: {autoClose: config.autoClose, autoCloseSeconds: config.autoCloseSeconds},
+      plans: bars.map(bar => ({id: bar.id, state: bar.state, updatedAt: bar.updatedAt,
+        done: allSteps(bar).filter(step => step.status === "done" || step.status === "skipped").length,
+        total: allSteps(bar).length,
+        visibility: visibilityReason(bar, now, Number(config.autoCloseSeconds),
+          agents === null ? null : agents.some(agent => agent.state === "running"), config.autoClose)})),
+    };
+  }
 
   bb.agents.registerTool({
     name: "plan_progress",
@@ -573,13 +695,13 @@ export default async function plugin(bb: BbPluginApi) {
       }
       switch (command) {
         case "diagnose": {
-          await refreshDiagnostic(threadId);
-          const config = await settings.get();
-          const diagnostic = diagnostics.get(threadId) ?? NO_DIAGNOSTIC;
-          const report = { threadId, isolateClaude: config.isolateClaude,
-            bars: (await readBars(threadId)).length, ...diagnostic };
+          const report = await diagnosticReport(threadId);
           return { exitCode: 0, stdout: json ? JSON.stringify(report) :
-            `BB/${threadId}: ${report.bars} bars; last source: ${report.source ?? "no recognized call"}; Claude isolation requested: ${report.isolateClaude}.\n${report.warning ?? "No detected tool collision."}` };
+            `BB/${threadId}: ${report.bars} bars; provider: ${report.providerId ?? "unknown"}; thread: ${report.threadStatus ?? "unknown"}; last route: ${report.source ?? "no recognized call"}.\n` +
+            `${report.warning ?? "No detected tool collision (not proof the tool is available)."}\n` +
+            `Reminder: ${report.reminder.delivery}; history: recent window (earlier history may be absent), ${report.history.readFailed ? "read failed" : report.history.caughtUp ? "caught up" : "incomplete"}.\n` +
+            report.plans.map(plan => `${plan.id}: ${plan.state}; ${plan.done}/${plan.total} steps; ${plan.visibility}`).join("\n") +
+            "\nAuto-hide conditions describe a server snapshot, not visibility in a particular browser. Use --json for evidence and limits." };
         }
         case "show": {
           const bars = await readBars(threadId);
@@ -598,7 +720,7 @@ export default async function plugin(bb: BbPluginApi) {
           }
           const op = opSchema.safeParse(parsed);
           if (!op.success) return { exitCode: 1, stderr: z.prettifyError(op.error) };
-          const result = await apply(threadId, op.data);
+          const result = await apply(threadId, op.data, "cli");
           return result.ok
             ? { exitCode: 0, stdout: result.text }
             : { exitCode: 1, stderr: result.text };

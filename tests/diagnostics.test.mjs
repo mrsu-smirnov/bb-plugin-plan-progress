@@ -31,3 +31,16 @@ test("Pi's unnamespaced BB tool is recognized by the stamped response", () => {
   row.data.item.result = 'BB/thread-test: task "Check": 0/3 done, running';
   assert.equal(progressSource(row), "bb");
 });
+
+test('agent-scoped progress cannot replace the main agent route', () => {
+  const row = {...call(40,'plan-progress'),scope:{kind:'agent',agentId:'helper',turnId:'child'}};
+  assert.equal(progressSource(row),null);
+});
+
+test('a failed native progress call with plugin presentation is recognized without a success stamp', () => {
+  const row = call(41,undefined);
+  row.data.item.status='failed';
+  row.data.item.presentation={icon:{glyph:'ListTodo'}};
+  assert.equal(progressSource(row),'bb');
+  assert.equal(advanceDiagnostic(NO_DIAGNOSTIC,[row]).lastOutcome,'failed');
+});

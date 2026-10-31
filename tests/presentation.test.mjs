@@ -21,3 +21,14 @@ test("auto-hide waits for completion, the delay and agents; restored finishes st
   assert.equal(dueToHide({ ...bar, hidden: "manual" }, 31_000, 30, false), false);
   assert.equal(dueToHide({ ...bar, autoCloseHandledAt: 1000 }, 31_000, 30, false), false);
 });
+
+test('visibility conditions separate stored state, settings and incomplete observations', async () => {
+  const {visibilityReason}=await import('../presentation.ts');
+  const bar={state:'done',endedAt:1000};
+  assert.equal(visibilityReason(bar,40000,30,null),'agents-unknown');
+  assert.equal(visibilityReason(bar,40000,30,false,false),'auto-close-off');
+  assert.equal(visibilityReason({...bar,state:'needs_input'},40000,30,false),'needs-input');
+  assert.equal(visibilityReason({...bar,state:'running'},40000,30,false),'plan-open');
+  assert.equal(visibilityReason({...bar,autoCloseHandledAt:1000},40000,30,false),'restored-finish');
+  assert.equal(visibilityReason(bar,40000,30,false),'eligible-to-hide');
+});

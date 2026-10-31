@@ -13,6 +13,9 @@ Other providers use their advertised BB tool. Read-only tasks with three
 actions count too, even in one turn and with subagents forbidden.
 If unavailable, try `bb plan-progress op '<json>'` in the current thread;
 report failure if neither route works. Do not silently switch to the Desktop mod.
+Never invent tool names. If a result is lost, do not blindly repeat next:true:
+it advances again. Inspect `bb plan-progress show --json` once, then update
+uniquely named steps with done/active. There is no automatic op deduplication.
 Before closing, mark completed step titles done: `state:"done"` alone
 does not change unfinished step statuses.
 
@@ -75,7 +78,7 @@ Inside a thread (or with `--thread <id>`):
 | `bb plan-progress show [--json]` | List the thread's bars |
 | `bb plan-progress op '<json>'` | Apply one op, same as the tool |
 | `bb plan-progress agents [--json]` | List the subagents of the latest turn |
-| `bb plan-progress diagnose [--json]` | Check routing, bars, and requested Claude isolation |
+| `bb plan-progress diagnose [--json]` | Observe routing/outcomes, reminder delivery, bounded coverage and auto-hide conditions; never sends a reminder |
 | `bb plan-progress clear` | Remove every bar of the thread |
 
 ## Subagent strips
@@ -96,6 +99,20 @@ defaults to true. For a custom native executable, set `claudeExecutable` to its
 absolute path on the host. Start a new thread to receive changed instructions.
 Windows has not yet been validated on a real host.
 
-`automaticReminders` defaults to true: at most one strict steer per active
-turn after 3 work calls without a bar or 6 without an update. It never starts
-a follow-up turn. This improves compliance rather than guaranteeing it.
+`automaticReminders` defaults to true: one attempted strict steer per observed
+root turn after 3 work calls without a bar or 6 without an update. The attempt
+survives plugin reload. A missing start or unexpected scope can suppress it;
+legacy unscoped data uses a fallback without root identity. Diagnose distinguishes
+not-attempted, unknown, sent, send-error and skipped; sent is not proof the model
+followed it. It never starts a follow-up turn. This improves compliance rather
+than guaranteeing it.
+
+About progress opens by click/tap in the banner; the rule also appears in the
+README so it is available before the first bar. An idle thread need not have a
+completed plan. Auto-hide conditions from diagnose describe server observations,
+not the actual state of every browser. A visible accepted new human message can
+resume several waiting plans; it does not prove each question was answered.
+
+Fresh candidate checks cover Codex and OpenCode v2/Go Claude Haiku only. Pi with
+Ollama Cloud/OpenRouter and fresh Claude Code need external live acceptance;
+do not infer support for all models from one provider's successful run.

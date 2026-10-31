@@ -74,6 +74,48 @@ Windows host. Claude Desktop's GUI was not driven in these checks: the native
 plugin list confirms enabled in an ordinary launch, disabled in the BB launch,
 with the settings file unchanged.
 
+### Compatibility candidate: 0.6
+
+The agent creates the bar by calling BB's tool; the plugin does not infer every
+user task. The standing rule is three or more actions, including reads. Short
+answers and conversation need no bar. **About progress** in the banner explains
+this by click/tap. The same rule applies regardless of model, but model compliance
+is measured separately from tool availability and execution.
+
+`bb plan-progress diagnose --json` now reports provider identity when readable,
+the last requested model (not a guarantee of the active session model), recognized
+call outcome, the last native/CLI execution observed by this plugin runtime,
+reminder delivery, bounded-history coverage, and each plan's state, finished-step
+count and auto-hide conditions. It never sends a reminder itself. Unknown or
+unavailable evidence stays unknown. Reports omit conversation text, commands and
+tool arguments. The report is an observation assembled from several reads, not
+an atomic snapshot or proof of a missing tool.
+
+An idle thread may still have an open plan. Explicit `state:"done"` does not
+change step statuses. Auto-close waits for a done plan, its delay and tracked
+helpers; restored finishes stay visible. Server conditions are not proof that a
+particular browser has already hidden the row (its page may be closed or stale).
+Existing settings and hidden plans are preserved.
+
+Reminders exclude native helper scopes, retain an attempted send across plugin
+reload, and reset their budget on a proven new root start. Failed/unknown sends
+are recorded without starting a new turn. A bounded window missing a start, or
+an unexpected turn scope, can suppress a reminder until the next proven start.
+Legacy unscoped envelopes retain the older fallback; they cannot establish a
+root identity. Sending once is not proof that a model read or followed it.
+
+BB's public tool context does not expose a stable invocation ID. Repeating
+`next:true` advances twice; no automatic deduplication is promised. If a result
+is lost, inspect `bb plan-progress show --json` once, then update uniquely named
+steps. Reloading a browser, reloading a plugin and recreating a provider session
+are different operations: tools/instructions change only at session boundaries.
+
+Live candidate observations cover Codex `gpt-6.1-sol` and OpenCode v2
+`opencode-go/claude-haiku-5-5` using existing connections. This is not validation
+of every model or subscription. Pi/Ollama Cloud, Pi/OpenRouter and fresh Claude
+Code remain unverified on this host. The exact models used by the external tester
+are still unknown. See [verification and limitations](docs/upstream-coverage.md).
+
 ### Answer speed
 
 `⚡ ≈ 42 tok/s` stands in the message box before the voice and send buttons,

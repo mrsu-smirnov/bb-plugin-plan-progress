@@ -96,6 +96,7 @@ test("a missing-plan reminder uses strict steering once and never sends from an 
     await h.emitThreadEvent("thread.active", { thread: { id: "thread-test" } });
     events = [1,2,3].map(seq => ({ seq, createdAt: Date.now() + 1, type: "item/completed",
       data: { item: { type: "fileRead" } } }));
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'thread-test',status:'active'}});
     await h.callRpc("diagnostics_get", { threadId: "thread-test" });
     assert.equal(sent.length, 1);
     assert.equal(sent[0].mode, "steer");
@@ -310,4 +311,149 @@ test('simultaneous agent reads share their in-flight SDK snapshot', async () => 
   }}});
   try {await plugin(bb);await Promise.all(Array.from({length:8},()=>h.callRpc('agents_get',{threadId:'thread-test'})));assert.equal(reads,1);}
   finally {await h.dispose();}
+});
+
+test('root reminder survives duplicate active and plugin reload; send errors stay observable', async () => {
+  let events=[]; let sends=0;
+  const sdk={threads:{
+    get:async()=>({id:'thread-test',providerId:'opencode2',status:'active'}),
+    events:{list:async args=>events.filter(e=>(!args.types || args.types.includes(e.type)) && e.seq>Number(args.afterSeq??0))
+      .sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
+    send:async()=>{sends++;throw Error('transport unavailable');},
+    timeline:async()=>({rows:[],activeBackgroundCommands:[]}),list:async()=>[],
+  }};
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk});let current=h;
+  const work=(seq,turnId,type='item/completed')=>({seq,createdAt:100+seq,type,scope:{kind:'turn',turnId},data:{item:{type:'fileRead'}}});
+  try {
+    await plugin(bb);
+    await h.emitThreadEvent('thread.active',{thread:{id:'thread-test'}});
+    events=[work(1,'main','turn/started'),work(2,'main'),work(3,'main'),work(4,'main')];
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'thread-test',status:'active'}});
+    await h.callRpc('diagnostics_get',{threadId:'thread-test'});
+    assert.equal(sends,1);
+    await h.emitThreadEvent('thread.active',{thread:{id:'thread-test'}});
+    await h.callRpc('diagnostics_get',{threadId:'thread-test'});assert.equal(sends,1);
+    current=(await h.lifecycle.reload(plugin)).harness;
+    let result=await current.runCli(['diagnose','--json'],{threadId:'thread-test'});
+    const report=JSON.parse(result.stdout);
+    assert.equal(sends,1);assert.equal(report.reminder.delivery,'send-error');
+    assert.equal(report.providerId,'opencode2');assert.equal(report.nativeToolAvailability.startsWith('unknown'),true);
+    events.push(work(5,'next','turn/started'),work(6,'next'),work(7,'next'),work(8,'next'));
+    await current.emitThreadEvent('experimental_thread.events',{thread:{id:'thread-test',status:'active'}});
+    await current.callRpc('diagnostics_get',{threadId:'thread-test'});assert.equal(sends,2);
+  } finally {await current.dispose();}
+});
+
+test('diagnose separates CLI observations, plan state, unfinished counts and browser visibility', async () => {
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',settings:{autoClose:false},sdk:{threads:{
+    get:async()=>({id:'thread-test',providerId:'pi',status:'idle'}),
+    events:{list:async({types})=>types.includes('client/turn/requested')?[{seq:1,createdAt:100,type:'client/turn/requested',scope:{kind:'thread'},data:{execution:{model:'observed-model'}}}]:[]},
+    timeline:async()=>({rows:[],activeBackgroundCommands:[]}),list:async()=>[],
+  }}});
+  try {
+    await plugin(bb);
+    await h.runCli(['op',JSON.stringify({id:'example',steps:[{title:'A'},{title:'B'}],state:'done'})],{threadId:'thread-test'});
+    const report=JSON.parse((await h.runCli(['diagnose','--json'],{threadId:'thread-test'})).stdout);
+    assert.equal(report.lastOperation.route,'cli');assert.equal(report.lastRequestedModel,'observed-model');
+    assert.equal(report.plans[0].state,'done');assert.equal(report.plans[0].done,0);
+    assert.equal(report.plans[0].visibility,'auto-close-off');assert.equal(report.history.scope,'recent-window');
+    assert.equal(JSON.stringify(report).includes('title'),false);
+    const failed=await h.callAgentTool('plan_progress',{id:'does-not-exist',next:true});assert.equal(failed.isError,true);
+    const after=JSON.parse((await h.runCli(['diagnose','--json'],{threadId:'thread-test'})).stdout);
+    assert.equal(after.lastOperation.route,'native');assert.equal(after.lastOperation.ok,false);
+  }finally{await h.dispose();}
+});
+
+test('event read failure is incomplete evidence, not a claim that a model lacks the tool', async () => {
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    events:{list:async()=>{throw Error('offline');}},
+    timeline:async()=>({rows:[],activeBackgroundCommands:[]}),list:async()=>[],
+  }}});
+  try{
+    await plugin(bb);
+    const result=await h.runCli(['diagnose','--json'],{threadId:'thread-test'});
+    const report=JSON.parse(result.stdout);
+    assert.equal(report.history.readFailed,true);assert.equal(report.source,null);
+    assert.equal(report.providerId,null);assert.equal(report.nativeToolAvailability.startsWith('unknown'),true);
+  }finally{await h.dispose();}
+});
+
+test('a delayed reminder send cannot restore deleted state after thread deletion', async () => {
+  let release,started;
+  const sending=new Promise(resolve=>{started=resolve;});
+  const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
+    ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
+    send:async()=>{started();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
+  }}});
+  try{
+    await plugin(bb);
+    await h.emitThreadEvent('thread.active',{thread:{id:'thread-test'}});
+    const pending=h.callRpc('diagnostics_get',{threadId:'thread-test'});
+    await sending;
+    await h.emitThreadEvent('thread.deleted',{thread:{id:'thread-test'}});
+    release();await pending;
+    await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(await bb.storage.kv.get('reminder-v06:thread-test'),undefined);
+  }finally{await h.dispose();}
+});
+
+test('diagnose only observes: no send even when a stored reminder threshold is due', async () => {
+  const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
+    ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
+  let sends=0;
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({id:'thread-test',providerId:'codex',status:'active'}),
+    events:{list:async args=>rows.filter(e=>(!args.types||args.types.includes(e.type))&&e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
+    send:async()=>{sends++;return {delivery:'sent'};},timeline:async()=>({rows:[],activeBackgroundCommands:[]}),list:async()=>[],
+  }}});
+  try{
+    await plugin(bb);
+    const report=JSON.parse((await h.runCli(['diagnose','--json'],{threadId:'thread-test'})).stdout);
+    assert.equal(sends,0);assert.equal(report.reminder.work,3);assert.equal(report.reminder.sent,false);
+  }finally{await h.dispose();}
+});
+
+test('incremental history reaches its tail before any reminder decision', async () => {
+  let rows=[];let sends=0;
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq).slice(0,100)},
+    send:async()=>{sends++;return {delivery:'sent'};},
+  }}});
+  try{
+    await plugin(bb);
+    await h.emitThreadEvent('thread.active',{thread:{id:'thread-test'}});
+    await h.callRpc('diagnostics_get',{threadId:'thread-test'});
+    rows=[{seq:1,createdAt:1,type:'turn/started',scope:{kind:'turn',turnId:'old'},data:{}},
+      ...Array.from({length:110},(_,i)=>({seq:i+2,createdAt:i+2,type:'item/completed',scope:{kind:'turn',turnId:'old'},data:{item:{type:'fileRead'}}})),
+      {seq:112,createdAt:112,type:'turn/completed',scope:{kind:'turn',turnId:'old'},data:{}},
+      {seq:113,createdAt:113,type:'turn/started',scope:{kind:'turn',turnId:'new'},data:{}}];
+    await h.emitThreadEvent('experimental_thread.events',{thread:{id:'thread-test',status:'active'}});
+    await h.callRpc('diagnostics_get',{threadId:'thread-test'});
+    assert.equal(sends,0);
+    assert.equal((await bb.storage.kv.get('reminder-v06:thread-test')).turnId,'new');
+  }finally{await h.dispose();}
+});
+
+test('old send completion after plugin reload cannot overwrite the new generation', async () => {
+  let release,entered;const sending=new Promise(resolve=>{entered=resolve;});
+  const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
+    ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
+  const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
+    send:async()=>{entered();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
+  }}});let current=h;
+  try{
+    await plugin(bb);
+    await h.emitThreadEvent('thread.active',{thread:{id:'thread-test'}});
+    const pending=h.callRpc('diagnostics_get',{threadId:'thread-test'});
+    await sending;
+    const replacement=await h.lifecycle.reload(plugin);current=replacement.harness;
+    release();await pending.catch(()=>{});
+    const before=await current.callRpc('diagnostics_get',{threadId:'thread-test'});
+    assert.equal(before.diagnostic.warning,null);
+    const report=JSON.parse((await current.runCli(['diagnose','--json'],{threadId:'thread-test'})).stdout);
+    assert.equal(report.reminder.delivery,'unknown');assert.equal(report.reminder.sent,true);
+  }finally{await current.dispose();}
 });

@@ -374,3 +374,15 @@ test('connected stale initial RPC cannot restore an agent after server empty upd
     assert.equal(slot.queryByText('Old helper'),null);
   } finally {slot.unmount();await h.dispose();}
 });
+
+test('progress explanation opens by click and describes model responsibility without inventing completion', async () => {
+  localStorage.clear();
+  const slot=mount(()=>fixture().slice(0,1));
+  try {
+    const summary=await slot.findByText('About progress');
+    fireEvent.click(summary);
+    assert.match(slot.getByText(/The agent is instructed/).textContent,/three or more actions/);
+    assert.match(slot.getByText(/An idle thread/).textContent,/still have an open plan/);
+    assert.ok(slot.getByText(/diagnose/));
+  }finally{slot.unmount();}
+});

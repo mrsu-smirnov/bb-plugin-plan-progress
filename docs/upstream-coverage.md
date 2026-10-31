@@ -4,6 +4,66 @@ The detailed baseline inventory below describes **released BB 0.4.0**, not an
 assertion that every difference is still present in 0.5.0. Keep this inventory
 available as a current document instead of relying on old Git history.
 
+## 0.6 candidate (not a published release)
+
+The candidate adds scope-aware routing/reminders, observed failure outcomes,
+durable root-turn reminder attempts, bounded evidence and native/CLI observations
+in diagnose, common auto-hide conditions, and a tap/click explanation in the UI.
+No Plan Mode import, blocking hooks or invocation deduplication is claimed.
+
+Independent review reproduced and closed late-turn reminder rearming and
+post-delete send persistence. Additional checks cover reload during send,
+intermediate pagination, unknown root coverage, read failures and observer-only
+diagnose. A completed send can still be unknown across reload; a late foreign
+turn can suppress a reminder until another proven start. Legacy unscoped events
+keep a fallback without proof of root identity. Diagnose is not an atomic
+snapshot. Server auto-hide eligibility is not proof of any browser's visibility.
+
+| Connection | Candidate live evidence | Limits |
+| --- | --- | --- |
+| Codex / gpt-6.1-sol, medium | Three independent ordinary read-only tasks created and completed native plans without a progress request | Existing connection, one model; no inference about all accounts/models |
+| OpenCode v2 / opencode-go/claude-haiku-5-5 | Three independent ordinary read-only tasks created and completed native plans | A run attempted an unavailable invented tool and recovered; model compliance is separate from engine execution |
+| Pi / Ollama Cloud | Not run | Provider unavailable on the test host; tester's exact model unknown |
+| Pi / OpenRouter | Not run | Provider unavailable on the test host; tester's exact model unknown |
+| Claude Code | Not freshly run | Provider unavailable on this host; old evidence does not validate this candidate |
+| ACP OpenCode | Not run | Listing/installation does not validate a different bridge |
+
+Candidate verification on 2026-10-31: 65 unit, 23 integration and 15 UI checks
+passed, along with typecheck/build/diff checks. Independent Astra review found
+no remaining blockers in the reviewed code after three narrow corrections.
+Native invalid-step rejection, needs_input and continuation after a visible
+browser-submitted reply were also exercised on both available connections;
+the intermediate automatic running transition was not captured separately.
+The tap-open explanation was inspected in actual BB, including 390 px; narrow
+light/dark plan layouts were inspected. Existing auto-close=true/60s and other
+saved settings remained intact. Fresh live approval grant/deny/cancel, forced
+stop/retry, model switching and Pi/Claude coverage remain unverified; harness
+cases do not substitute for those provider-level runs.
+
+### External acceptance before claiming a connection is tested
+
+Record BB/plugin/agent versions, provider ID, exact model, service and connection
+method (subscription/OAuth/API, never keys), permission mode and saved settings.
+A different model on the same service is a different observation.
+
+1. In a new session, request three sequential read-only actions on harmless local
+   files without asking for progress. Record whether a plan appears before work,
+   updates between actions and ends with all completed steps. Repeat three times.
+2. Separately ask for a known valid native plan_progress call. Check the returned
+   BB stamp and rendered plan. Test CLI fallback separately; it cannot prove native
+   tool availability. Ask for an invalid step and check that old progress remains.
+3. Set needs_input, send a visible test answer, continue and finish. Check an
+   interrupted run and resumption; test helpers/approvals only when supported.
+4. Reload the page, then plugin, then provider session as distinct cases. Record
+   any stale data. Changed tools/instructions require a new provider session.
+5. Run diagnose --json and report only the bounded diagnostic fields, not raw
+   conversations, commands or credentials. Distinguish not-tested from failed
+   and not-applicable. A failure or limit is not proof the task succeeded.
+
+General settings, themes, hide/restore and mobile layout are shared regressions;
+repeat per connection only when provider-specific helper or lifecycle events
+justify it. No need to intentionally exhaust a real subscription.
+
 ## 0.5.0 changes
 
 Implementation reviewed through `7300bb18b97ebd5592fbe72b3f9501766df98d9a`.

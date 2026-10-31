@@ -1,12 +1,12 @@
 # Upstream coverage and verification
 
 The detailed baseline inventory below describes **released BB 0.4.0**, not an
-assertion that every difference is still present in 0.5.0. Keep this inventory
+assertion that every difference is still present in later releases. Keep this inventory
 available as a current document instead of relying on old Git history.
 
-## 0.6 candidate (not a published release)
+## 0.6.0 changes and verification
 
-The candidate adds scope-aware routing/reminders, observed failure outcomes,
+Version 0.6.0 adds scope-aware routing/reminders, observed failure outcomes,
 durable root-turn reminder attempts, bounded evidence and native/CLI observations
 in diagnose, and common auto-hide conditions. Appearance rules are explained in
 the README and settings; the banner has no help block.
@@ -20,7 +20,7 @@ turn can suppress a reminder until another proven start. Legacy unscoped events
 keep a fallback without proof of root identity. Diagnose is not an atomic
 snapshot. Server auto-hide eligibility is not proof of any browser's visibility.
 
-| Connection | Candidate live evidence | Limits |
+| Connection | 0.6.0 live evidence | Limits |
 | --- | --- | --- |
 | Codex / gpt-6.1-sol, medium | Three independent ordinary read-only tasks created and completed native plans without a progress request | Existing connection, one model; no inference about all accounts/models |
 | OpenCode v2 / opencode-go/claude-haiku-5-5 | Three independent ordinary read-only tasks created and completed native plans | A run attempted an unavailable invented tool and recovered; model compliance is separate from engine execution |
@@ -30,7 +30,7 @@ snapshot. Server auto-hide eligibility is not proof of any browser's visibility.
 | Claude Code | Not freshly run | Installed provider is disabled; no account/session change made |
 | ACP OpenCode / opencode-go/claude-haiku-5-5 | Three ordinary tasks completed plans; CLI fallback and explicit native execution, waiting and stop/resume tested | Model sometimes chooses CLI first; native tool discovery and packet execution differ from v2 |
 
-Candidate verification on 2026-10-31: 67 unit, 24 integration and 14 UI checks
+Verification on 2026-10-31: 67 unit, 24 integration and 14 UI checks
 passed, along with typecheck/build/diff checks. Independent Astra review found
 no remaining blockers in the reviewed code after three narrow corrections.
 Native invalid-step rejection, needs_input and continuation after a visible
@@ -49,7 +49,7 @@ provider retry, Pi/Ollama Cloud and fresh Claude Code remain unverified; harness
 substitute for those provider-level runs. A clean Git snapshot also built with
 production dependencies only (npm ci --omit=dev --ignore-scripts, bb plugin build).
 
-Additional local acceptance found Pi installed and enabled with an existing
+Additional local verification found Pi installed and enabled with an existing
 OpenRouter connection. Earlier statements that Pi was unavailable must not be
 read as a current installation diagnosis. No provider was enabled and no
 credentials were added for these tests. An ACP record contains caught inner

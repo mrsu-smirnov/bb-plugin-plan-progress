@@ -89,7 +89,7 @@ expansion is saved per browser and thread. Confirmed errors and unknown outcomes
 remain visible while present in the source. Open approvals in the current
 thread and its direct children are counted without assigning them to an agent.
 Fresh Claude and Pi-helper lifecycle coverage remains incomplete; see the
-candidate verification table for the later Pi basic-flow checks.
+0.6.0 verification table for the later Pi basic-flow checks.
 
 ## Coexistence with Claude Desktop
 
@@ -114,7 +114,7 @@ An idle thread need not have a completed plan. Auto-hide conditions from diagnos
 not the actual state of every browser. A visible accepted new human message can
 resume several waiting plans; it does not prove each question was answered.
 
-Fresh candidate checks cover Codex, OpenCode v2 and ACP/Go Claude Haiku, and
+Fresh 0.6.0 checks cover Codex, OpenCode v2 and ACP/Go Claude Haiku, and
 Pi 1.4.0/OpenRouter Haiku 5.5 plus Luna. Pi/Ollama Cloud and fresh Claude Code
 remain unverified. ACP can wrap several native calls into one code record:
 diagnose uses the last matching inner outcome; truncated metadata remains

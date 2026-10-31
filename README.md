@@ -74,7 +74,7 @@ Windows host. Claude Desktop's GUI was not driven in these checks: the native
 plugin list confirms enabled in an ordinary launch, disabled in the BB launch,
 with the settings file unchanged.
 
-### Compatibility candidate: 0.6
+### 0.6.0: compatibility and reliable reminders
 
 The agent creates the bar by calling BB's tool; the plugin does not infer every
 user task. The standing rule is three or more actions, including reads. Short
@@ -112,7 +112,7 @@ is lost, inspect `bb plan-progress show --json` once, then update uniquely named
 steps. Reloading a browser, reloading a plugin and recreating a provider session
 are different operations: tools/instructions change only at session boundaries.
 
-Live candidate observations cover Codex `gpt-6.1-sol`, OpenCode v2 and ACP
+Live 0.6.0 observations cover Codex `gpt-6.1-sol`, OpenCode v2 and ACP
 OpenCode `opencode-go/claude-haiku-5-5`, and Pi 1.4.0 through OpenRouter
 (`anthropic/claude-haiku-5.5`, plus `openai/gpt-6-luna`). Existing connections were
 used. This is not validation of every model or subscription. Pi/Ollama Cloud and
@@ -199,7 +199,7 @@ system messages, other agents and retries do not. An explicit plan op also
 changes the state. Matching uses request IDs and request timestamps; bounded
 event reads and timestamps mean very old or indistinguishable events cannot
 be proved. Fresh Claude and Pi-helper lifecycle evidence remains incomplete;
-the candidate verification table distinguishes later Pi basic-flow checks from
+the 0.6.0 verification table distinguishes later Pi basic-flow checks from
 the original 0.5.0 acceptance. The
 prior 0.4.0 audit is preserved in [the coverage inventory](docs/upstream-coverage.md). This is a partial port of
 pinned upstream `b77335ee560c609d67ae85c7321f886719361426`.

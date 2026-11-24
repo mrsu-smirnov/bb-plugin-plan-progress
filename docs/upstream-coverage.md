@@ -42,6 +42,61 @@ host) that fail on the 0.6.1 logic.
   event logs through the new logic removed both late reminders and kept the
   four timely ones.
 
+**Changed after probes (before the tag)**
+
+- Two release modes, chosen by the thread's provider. "On start" (the change
+  above) only for `claude-code`, `codex` and `opencode2`
+  (`START_RELEASE_PROVIDERS` in `reminders.ts`). "Between calls" for every
+  other provider, including any ACP provider, `pi`, unknown and future ones,
+  and when the provider cannot be read: the armed reminder is released when a
+  later work call of the same root turn completes (by `seq`) and no main-agent
+  tool call is open (started, not completed: commands, reads, edits,
+  `toolCall`/`mcpToolCall`, web and image tools, delegations; `plan_progress`
+  and `ToolSearch` included). Reasoning and message items are not calls. A
+  completed `plan_progress` still resets the count and never releases it.
+- Open calls are tracked by item id in the saved state (`open`, `openKnown`);
+  records without these fields are read, and between calls they stay silent
+  until the next observed root start. A completion whose start was not seen,
+  or a first read after reload whose 100-event window may not reach the saved
+  state, makes the tracking unknown: no reminder in that mode until the next
+  root start.
+- The provider is taken from event payloads, else read once per thread.
+- The final check before sending also looks for a call start after the events
+  read; if one began, nothing is sent and the reminder waits for the next
+  completion. One reminder per turn as before.
+
+**Based on**: probes on 0.6.2 with one model each. Codex and OpenCode v2: the
+running command finished; the reminder arrived before the final answer. Claude
+Code stays in the early mode on the event log behind the change above (the
+message waits for the next tool result); no separate probe of this change. Kimi (`acp-kimi-code`): the reminder sent at the start of a
+command interrupted it (status `failed`, "Interrupted by user", exit code 1),
+and the model ran it again. In that event log item ids pair starts with
+completions, one call can report several starts, and reasoning items start
+without ever completing.
+
+**Checked** by unit tests (both modes on the same events, parallel calls,
+`plan_progress`, unknown provider, old state) and integration tests (`acp-…`
+and unknown providers send only after completion with nothing open; a call
+starting during the final check holds it; `codex` sends at the start), all
+failing on the code before this change.
+
+**Not checked**
+
+- Pi and a second ACP provider; whether a message between calls interrupts a
+  model's reasoning or text in ACP providers.
+- A live run of this change; acceptance probes are left to the release check.
+- A provider that reports completions without starts would never get a
+  reminder between calls in that turn.
+- Delegations stay open until they complete, so a long-running subagent holds
+  the reminder.
+
+**Live probes of the final 0.6.2 build** (BB 0.50.1, one run per case): Kimi
+through ACP received the reminder after the seventh command had completed, with
+no call running, and no command was interrupted; a three-command Kimi task got
+no reminder. Codex and OpenCode v2 behaved as before the change: reminder at the
+start of the seventh command, command not interrupted, seen before the final
+answer; short tasks got none. Not run: Pi, the second ACP provider, Claude Code.
+
 ## 0.6.1 changes
 
 Fix release; no new features. Test counts of this release are in the pull

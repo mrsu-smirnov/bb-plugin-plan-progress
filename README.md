@@ -66,8 +66,14 @@ per active turn after three work calls without a bar or six without an update
 (once a bar exists, file reads are not counted). A reminder is accepted into
 the running turn, but some providers (observed: Claude Code, OpenCode) show it
 to the agent only at the next boundary; after a finished answer that is too late and causes a second, needless
-answer. So since 0.6.2 it is sent only once the next work call has begun after
-the threshold (starting `plan_progress` or `ToolSearch` does not count). If that
+answer. So since 0.6.2 it waits for the work to go on, in one of two modes
+chosen by the thread's provider. For Claude Code, Codex and OpenCode v2 it is
+sent once the next work call has begun after the threshold (starting
+`plan_progress` or `ToolSearch` does not count); there a message was not seen
+to interrupt the running call. For every other provider (ACP providers such
+as Kimi, Pi, unknown ones) it is sent only between calls: once the next work
+call has completed and no tool call is still running, because in a Kimi probe
+a message sent at a call's start interrupted the running command. If the next
 call is the last and quick, the reminder can still arrive after the answer.
 Separately, BB's API has no way to send "only into a running turn": a steering
 message sent to an idle thread starts a turn. So the plugin checks that the
@@ -91,6 +97,10 @@ with the settings file unchanged.
 - The automatic reminder no longer arrives after a finished answer: it is sent
   only when a next work call has begun after the threshold was reached. Older
   saved reminder state is read as before.
+- That early moment is used only for Claude Code, Codex and OpenCode v2. Any
+  other provider (ACP, Pi, unknown) gets the reminder between calls, after the
+  next work call has completed with no tool call still running: in Kimi (ACP)
+  a reminder at a call's start interrupted the running command.
 
 ### 0.6.1: fixes
 

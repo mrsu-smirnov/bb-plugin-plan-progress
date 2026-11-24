@@ -86,7 +86,7 @@ test("a missing-plan reminder uses strict steering once and never sends from an 
   let events = [];
   const sent = [];
   const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
-    get: async () => ({ status: "active" }),
+    get: async () => ({ status: "active", providerId: "claude-code" }),
     events: { list: async args => events.filter(e => e.seq > Number(args.afterSeq ?? 0))
       .sort((a,b) => args.order === "desc" ? b.seq-a.seq : a.seq-b.seq) },
     timeline: async () => ({ rows: [], activeBackgroundCommands: [] }),
@@ -390,7 +390,7 @@ test('a delayed reminder send cannot restore deleted state after thread deletion
     ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}})),
     {seq:5,createdAt:105,type:'item/started',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}];
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
-    get:async()=>({status:'active'}),
+    get:async()=>({status:'active',providerId:'codex'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
     send:async()=>{started();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
   }}});
@@ -451,7 +451,7 @@ test('old send completion after plugin reload cannot overwrite the new generatio
     ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}})),
     {seq:5,createdAt:105,type:'item/started',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}];
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
-    get:async()=>({status:'active'}),
+    get:async()=>({status:'active',providerId:'codex'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
     send:async()=>{entered();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
   }}});let current=h;
@@ -582,7 +582,7 @@ test("a reminder is not sent when the turn ended during the final recheck, or th
     } } });
     try {
       await plugin(bb);
-      await h.emitThreadEvent("thread.active", { thread: { id: "thread-test" } });
+      await h.emitThreadEvent("thread.active", { thread: { id: "thread-test", providerId: "codex" } });
       await h.callRpc("diagnostics_get", { threadId: "thread-test" });
       assert.equal(sent.length, 0, ending);
       const report = JSON.parse((await h.runCli(["diagnose", "--json"], { threadId: "thread-test" })).stdout);
@@ -596,7 +596,7 @@ test("0.6.2: the event request includes item/started; a turn ending without a ne
   const rows = [{ seq: 1, createdAt: 100, type: "turn/started", scope: { kind: "turn", turnId: "a" }, data: {} },
     ...[2, 3, 4].map(seq => ({ seq, createdAt: seq + 100, type: "item/completed", scope: { kind: "turn", turnId: "a" }, data: { item: { type: "fileRead" } } }))];
   const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
-    get: async () => ({ status: "active" }),
+    get: async () => ({ status: "active", providerId: "codex" }),
     events: { list: async args => { requested.push(args.types);
       return rows.filter(e => (!args.types || args.types.includes(e.type)) && e.seq > Number(args.afterSeq ?? 0))
         .sort((a, b) => args.order === "desc" ? b.seq - a.seq : a.seq - b.seq); } },
@@ -613,4 +613,95 @@ test("0.6.2: the event request includes item/started; a turn ending without a ne
     await h.callRpc("diagnostics_get", { threadId: "thread-test" });
     assert.equal(sent.length, 0);
   } finally { await h.dispose(); }
+});
+
+// 0.6.2, second change: a steer in an ACP provider interrupted a running command.
+function releaseHost(providerId, onGet = () => {}) {
+  const rows = [], sent = [], gets = [];
+  const { bb, harness } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
+    get: async () => { gets.push(1); onGet(rows); return { status: "active", providerId }; },
+    events: { list: async args => rows.filter(e => (!args.types || args.types.includes(e.type)) && e.seq > Number(args.afterSeq ?? 0))
+      .sort((a, b) => args.order === "desc" ? b.seq - a.seq : a.seq - b.seq).slice(0, Number(args.limit ?? 100)) },
+    send: async args => { sent.push(args); return { ok: true, delivery: "sent" }; },
+  } } });
+  const at = (seq, type, item) => ({ seq, createdAt: Date.now() + seq, type, scope: { kind: "turn", turnId: "a" },
+    data: item ? { item: { status: "completed", ...item } } : {} });
+  const begin = (seq, id) => at(seq, "item/started", { id, type: "commandExecution", status: "pending" });
+  const end = (seq, id) => at(seq, "item/completed", { id, type: "commandExecution" });
+  rows.push(at(1, "turn/started"), begin(2, "a"), end(3, "a"), begin(4, "b"), end(5, "b"), begin(6, "c"), end(7, "c"));
+  // Event-triggered reads run in the background; let a queued re-read finish.
+  const settle = async () => { for (let i = 0; i < 3; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await harness.callRpc("diagnostics_get", { threadId: "thread-test" });
+  } };
+  const tick = async () => {
+    await harness.emitThreadEvent("experimental_thread.events", { thread: { id: "thread-test", status: "active" } });
+    await settle();
+  };
+  return { bb, h: harness, rows, sent, gets, begin, end, at, tick, settle };
+}
+
+test("0.6.2 ACP: an acp provider gets the reminder only after the next call completed with nothing open", async () => {
+  const { bb, h, rows, sent, begin, end, tick, settle } = releaseHost("acp-kimi-code");
+  try {
+    await plugin(bb);
+    await h.emitThreadEvent("thread.active", { thread: { id: "thread-test", providerId: "acp-kimi-code" } });
+    await settle();
+    await tick();
+    assert.equal(sent.length, 0, "threshold reached, no next call yet");
+    rows.push(begin(8, "d"), begin(9, "d"));
+    await tick();
+    assert.equal(sent.length, 0, "never at the start of a call");
+    rows.push(begin(10, "e"), end(11, "d"));
+    await tick();
+    assert.equal(sent.length, 0, "a parallel call is still running");
+    rows.push(end(12, "e"));
+    await tick();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].mode, "steer");
+    rows.push(begin(13, "f"), end(14, "f"));
+    await tick();
+    assert.equal(sent.length, 1, "one reminder per turn");
+  } finally { await h.dispose(); }
+});
+
+test("0.6.2 ACP: a call starting during the final recheck holds the reminder until it completes", async () => {
+  let raced = false;
+  const { bb, h, rows, sent, begin, end, tick, settle } = releaseHost("acp-kimi-code", list => {
+    // the next call begins while the plugin looks one last time
+    if (!raced && list.some(row => row.seq === 9)) { raced = true; list.push(begin(10, "e")); }
+  });
+  try {
+    await plugin(bb);
+    await h.emitThreadEvent("thread.active", { thread: { id: "thread-test", providerId: "acp-kimi-code" } });
+    await settle();
+    rows.push(begin(8, "d"), end(9, "d"));
+    await tick();
+    assert.equal(raced, true);
+    assert.equal(sent.length, 0);
+    const report = JSON.parse((await h.runCli(["diagnose", "--json"], { threadId: "thread-test" })).stdout);
+    assert.equal(report.reminder.sent, false);
+    assert.equal(report.reminder.delivery, "not-attempted");
+    rows.push(end(11, "e"));
+    await tick();
+    assert.equal(sent.length, 1);
+  } finally { await h.dispose(); }
+});
+
+test("0.6.2 ACP: an unknown provider is treated like ACP; codex still gets it at the next start", async () => {
+  for (const providerId of [undefined, "codex"]) {
+    const { bb, h, rows, sent, gets, begin, end, tick, settle } = releaseHost(providerId);
+    try {
+      await plugin(bb);
+      await h.emitThreadEvent("thread.active", { thread: { id: "thread-test" } });
+      await settle();
+      rows.push(begin(8, "d"));
+      await tick();
+      assert.equal(sent.length, providerId === "codex" ? 1 : 0, String(providerId));
+      rows.push(end(9, "d"));
+      await tick();
+      assert.equal(sent.length, 1, String(providerId));
+      if (providerId === "codex") assert.ok(gets.length <= 2, "the provider is read once and remembered");
+    } finally { await h.dispose(); }
+  }
 });

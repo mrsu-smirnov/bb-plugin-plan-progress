@@ -86,6 +86,7 @@ test("a missing-plan reminder uses strict steering once and never sends from an 
   let events = [];
   const sent = [];
   const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
+    get: async () => ({ status: "active" }),
     events: { list: async args => events.filter(e => e.seq > Number(args.afterSeq ?? 0))
       .sort((a,b) => args.order === "desc" ? b.seq-a.seq : a.seq-b.seq) },
     timeline: async () => ({ rows: [], activeBackgroundCommands: [] }),
@@ -384,6 +385,7 @@ test('a delayed reminder send cannot restore deleted state after thread deletion
   const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
     ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({status:'active'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
     send:async()=>{started();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
   }}});
@@ -418,6 +420,7 @@ test('diagnose only observes: no send even when a stored reminder threshold is d
 test('incremental history reaches its tail before any reminder decision', async () => {
   let rows=[];let sends=0;
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({status:'active'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq).slice(0,100)},
     send:async()=>{sends++;return {delivery:'sent'};},
   }}});
@@ -441,6 +444,7 @@ test('old send completion after plugin reload cannot overwrite the new generatio
   const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
     ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({status:'active'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
     send:async()=>{entered();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
   }}});let current=h;
@@ -468,4 +472,113 @@ test('ACP caught inner failure remains failed in the public diagnostic', async (
   try{await plugin(bb);const report=await h.callRpc('diagnostics_get',{threadId:'thread-test'});
     assert.equal(report.diagnostic.source,'bb');assert.equal(report.diagnostic.lastOutcome,'failed');
   }finally{await h.dispose();}
+});
+
+test("an op without a known action is refused by the tool and the CLI and keeps a question standing", async () => {
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress" });
+  try {
+    await plugin(bb);
+    await h.callAgentTool("plan_progress", { id: "q", title: "Ask", steps: ["A", "B"] });
+    await h.callAgentTool("plan_progress", { id: "q", state: "needs_input", note: "Which one?" });
+    for (const op of [{ id: "q" }, { id: "q", complete: ["A"] }]) {
+      const refused = await h.callAgentTool("plan_progress", op);
+      assert.equal(refused.isError, true);
+      assert.match(refused.content[0].text, /none of stages, steps, next/);
+      const cli = await h.runCli(["op", JSON.stringify(op)], { threadId: "thread-test" });
+      assert.equal(cli.exitCode, 1);
+      assert.match(cli.stderr, /none of stages, steps, next/);
+    }
+    const { bars } = await h.callRpc("bars_get", { threadId: "thread-test" });
+    assert.equal(bars[0].state, "needs_input");
+    assert.equal(bars[0].note, "Which one?");
+    const warned = await h.callAgentTool("plan_progress", { id: "q", next: true, complete: ["A"], other: 1 });
+    assert.match(warned, /ignored unknown field\(s\): complete, other/);
+    const viaCli = await h.runCli(["op", JSON.stringify({ id: "q", next: true, bogus: true })], { threadId: "thread-test" });
+    assert.equal(viaCli.exitCode, 0);
+    assert.match(viaCli.stdout, /ignored unknown field\(s\): bogus/);
+  } finally { await h.dispose(); }
+});
+
+test("the tool accepts plain-string steps and stage titles, and names an empty plan", async () => {
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress" });
+  try {
+    await plugin(bb);
+    assert.match(await h.callAgentTool("plan_progress", { id: "s", title: "T", stages: [{ title: "One", steps: ["A", "B"] }] }), /0\/2 done.*active: A/);
+    const empty = await h.callAgentTool("plan_progress", { id: "e", title: "T", stages: [{ name: "One", steps: [] }] });
+    assert.equal(empty.isError, true);
+    assert.match(empty.content[0].text, /Could not read the breakdown/);
+    assert.match(h.registrations.agentTools[0].instructions, /plain strings/);
+  } finally { await h.dispose(); }
+});
+
+test("CLI reads --thread=ID like --thread ID, rejects stray words and options, and clear obeys the thread", async () => {
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress" });
+  try {
+    await plugin(bb);
+    const op = JSON.stringify({ id: "p", title: "P", steps: ["A", "B"] });
+    assert.equal((await h.runCli(["op", op, "--thread=other"], { threadId: "mine" })).exitCode, 0);
+    assert.equal((await h.runCli(["op", op, "--thread", "mine"], { threadId: "mine" })).exitCode, 0);
+    assert.equal(JSON.parse((await h.runCli(["show", "--json", "--thread=other"], { threadId: "mine" })).stdout).length, 1);
+    for (const argv of [["show", "--bogus"], ["show", "extra"], ["clear", "now"], ["show", "--thread="], ["show", "--thread"]]) {
+      const result = await h.runCli(argv, { threadId: "mine" });
+      assert.equal(result.exitCode, 1, argv.join(" "));
+    }
+    assert.match((await h.runCli(["show", "--bogus"], { threadId: "mine" })).stderr, /Unknown option --bogus/);
+    assert.equal((await h.runCli(["clear", "--thread=other"], { threadId: "mine" })).exitCode, 0);
+    assert.equal((await h.runCli(["show", "--thread=other"], { threadId: "mine" })).stdout, "No bars.");
+    assert.notEqual((await h.runCli(["show"], { threadId: "mine" })).stdout, "No bars.");
+  } finally { await h.dispose(); }
+});
+
+test("answer evidence is read only while a plan waits on a person, and a failed read is only logged", async () => {
+  let reads = 0;
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress",
+    sdk: { threads: { events: { list: async (args) => { if (args.types?.includes("turn/input/accepted")) reads++; return []; } } } } });
+  try {
+    await plugin(bb);
+    await h.callAgentTool("plan_progress", { id: "w", steps: ["A", "B"] });
+    await h.emitThreadEvent("experimental_thread.events", { thread: { id: "thread-test" } });
+    await h.callRpc("bars_get", { threadId: "thread-test" });
+    assert.equal(reads, 0);
+    await h.callAgentTool("plan_progress", { id: "w", state: "needs_input", note: "?" });
+    await h.callRpc("bars_get", { threadId: "thread-test" });
+    assert.ok(reads > 0);
+    const rejections = [];
+    const record = (error) => rejections.push(error);
+    process.on("unhandledRejection", record);
+    try {
+      const get = bb.storage.kv.get;
+      bb.storage.kv.get = async () => { throw new Error("kv down"); };
+      await h.emitThreadEvent("experimental_thread.events", { thread: { id: "thread-test" } });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      bb.storage.kv.get = get;
+    } finally { process.off("unhandledRejection", record); }
+    assert.deepEqual(rejections, []);
+  } finally { await h.dispose(); }
+});
+
+test("a reminder is not sent when the turn ended during the final recheck, or the thread is no longer running", async () => {
+  for (const ending of ["completed-event", "idle-status"]) {
+    const sent = [];
+    const rows = [{ seq: 1, createdAt: 100, type: "turn/started", scope: { kind: "turn", turnId: "a" }, data: {} },
+      ...[2, 3, 4].map(seq => ({ seq, createdAt: seq + 100, type: "item/completed", scope: { kind: "turn", turnId: "a" }, data: { item: { type: "fileRead" } } }))];
+    const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
+      // the turn finishes while the plugin is looking
+      get: async () => {
+        if (ending === "completed-event") rows.push({ seq: 5, createdAt: 200, type: "turn/completed", scope: { kind: "turn", turnId: "a" }, data: {} });
+        return { status: ending === "idle-status" ? "idle" : "active" };
+      },
+      events: { list: async args => rows.filter(e => (!args.types || args.types.includes(e.type)) && e.seq > Number(args.afterSeq ?? 0))
+        .sort((a, b) => args.order === "desc" ? b.seq - a.seq : a.seq - b.seq) },
+      send: async args => { sent.push(args); return { ok: true, delivery: "sent" }; },
+    } } });
+    try {
+      await plugin(bb);
+      await h.emitThreadEvent("thread.active", { thread: { id: "thread-test" } });
+      await h.callRpc("diagnostics_get", { threadId: "thread-test" });
+      assert.equal(sent.length, 0, ending);
+      const report = JSON.parse((await h.runCli(["diagnose", "--json"], { threadId: "thread-test" })).stdout);
+      assert.equal(report.reminder.delivery, "skipped", ending);
+    } finally { await h.dispose(); }
+  }
 });

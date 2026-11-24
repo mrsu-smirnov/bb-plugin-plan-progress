@@ -14,6 +14,7 @@ import {
   STATE_NAMES,
   stateOf,
   setVisibility,
+  unknownFields,
   STEP_NAMES,
   type Bar,
   type Op,
@@ -21,7 +22,7 @@ import {
 import { AGENTS_CHANGED, agentFromChild, agentsFromRows, flattenTurnRows, type Agent, type ChildThread } from "./agents";
 import { acceptedHumanRequests, latestChildRun, backgroundEvidence, type EvidenceEvent } from "./evidence";
 import { hostContract } from "./host-contract";
-import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
+import { advanceDiagnostic, isMainEvent, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
 import { newReminderState, observeWork, type ReminderState } from "./reminders";
 import { visibilityReason } from "./presentation";
 import { version as pluginVersion } from "./package.json";
@@ -56,22 +57,29 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-const stepSchema = z.object({
-  title: z.string().min(1),
-  status: z.enum(STEP_NAMES).optional(),
-});
+const stepSchema = z.union([
+  z.string().min(1),
+  z.object({
+    title: z.string().min(1),
+    status: z.enum(STEP_NAMES).optional(),
+  }),
+]);
 
-const opSchema = z.object({
+// Loose on purpose: unknown keys must reach apply(), which reports them
+// instead of silently dropping them.
+const opSchema = z.looseObject({
   id: z.string().min(1).describe('One id per task, e.g. "auth".'),
   title: z
     .string()
     .optional()
-    .describe("Bar title, at most 4 words, in the user's language. Required on create."),
+    .describe("Bar title, at most 4 words, in the user's language. Give it when you create the bar."),
   kind: z.enum(["plan", "todo"]).optional(),
   stages: z
-    .array(z.object({ name: z.string(), steps: z.array(stepSchema) }))
+    .array(
+      z.object({ name: z.string().optional(), title: z.string().optional(), steps: z.array(stepSchema) }),
+    )
     .optional()
-    .describe("The whole plan: 2-7 stages of short steps. Resend to change the plan."),
+    .describe("The whole plan: 2-7 stages of short steps (titles or plain strings). Resend to change the plan."),
   steps: z.array(stepSchema).optional().describe("A flat list instead of stages."),
   next: z.boolean().optional().describe("Active step done, next one active."),
   done: z.array(z.string()).optional().describe("Step titles to mark done."),
@@ -88,7 +96,7 @@ const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress t
 - REQUIRED: for 3 or more requested actions, create the BB bar BEFORE the first work tool call. Read-only work counts. Reading three files counts. A task finished in one turn still counts. "No subagents" does not forbid a progress bar: the bar is UI bookkeeping, not a subagent or a workspace edit. Do not reinterpret three explicit steps as a one-step answer.
 - In Claude Code, discover and use mcp__bb-bridge__plan_progress (ToolSearch: select:mcp__bb-bridge__plan_progress). Never use mcp__plan-progress__plan_progress: it belongs to the Claude Desktop plugin and cannot display a bar in BB. Other providers use their advertised BB plan_progress tool.
 - If the BB tool is missing or fails, use the same operation with bb plan-progress op '<json>' in the current thread. If that also fails, report the failure; do not silently use the Desktop plugin.
-- A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]}. 2-7 stages, titles of at most 4 words, in the user's language.
+- A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]} (steps may be plain strings). 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
 - Before asking the user a question: {id, state:"needs_input", note}; an accepted human answer clears it; an explicit op also resumes. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
 - When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
@@ -103,7 +111,7 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     automaticReminders: {
       type: "boolean", label: "Automatic progress reminders",
-      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update. Missing history can suppress it. Never starts a new turn.",
+      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update (once a bar exists, file reads are not counted). Sent only after a fresh check that the turn is still running; a turn ending in the instant before delivery can still be restarted by it. Missing history can suppress it.",
       default: true,
     },
     isolateClaude: {
@@ -193,6 +201,18 @@ export default async function plugin(bb: BbPluginApi) {
       return true;
     });
   }
+  // A fresh look right before a reminder is sent: the thread reports itself
+  // running and no turn completed after the events already read. Anything
+  // unreadable counts as "not running". A turn ending after this look can
+  // still slip through; the SDK offers no way to close that last window.
+  async function turnStillRunning(threadId: string, afterSeq: number): Promise<boolean> {
+    try {
+      const thread = await bb.sdk.threads.get({ threadId });
+      if (thread.status !== "active") return false;
+      const later = await bb.sdk.threads.events.list({ threadId, types: ["turn/completed"], afterSeq: String(afterSeq), limit: "100" });
+      return !later.some(event => isMainEvent(event));
+    } catch { return false; }
+  }
   async function refreshDiagnostic(threadId: string, allowSend = false): Promise<void> {
     if (!live(threadId)) return;
     const busy = diagnosticPulls.get(threadId);
@@ -237,11 +257,18 @@ export default async function plugin(bb: BbPluginApi) {
           reminder.attemptedAt = Date.now();
           if (!await persistReminder(threadId, reminder) || !live(threadId)) return;
           try {
+            // steer on an idle thread starts a turn and the SDK has no "only
+            // into a running turn" option, so confirm the turn is still going
+            if (!await turnStillRunning(threadId, cursor ?? 0)) {
+              if (!live(threadId)) return;
+              reminder.delivery = "skipped";
+            } else {
             const delivered = await bb.sdk.threads.send({threadId, mode: "steer", input: [{type: "text",
               visibility: "agent-only", mentions: [],
               text: "BB plan-progress automatic reminder: several work calls have run. Create or update BB's plan_progress bar now for the remaining work (Claude: mcp__bb-bridge__plan_progress). A bar is UI bookkeeping, not a subagent or file edit. If the task is already finished, do not invent a plan retroactively. Do not repeat completed work. If the tool is unavailable, report that once."}]});
             if (!live(threadId)) return;
             reminder.delivery = delivered.delivery === "sent" ? "sent" : "unknown";
+            }
           } catch { if (!live(threadId)) return; reminder.delivery = "send-error"; }
         }
       }
@@ -309,11 +336,16 @@ export default async function plugin(bb: BbPluginApi) {
       lastOperations.set(threadId, {at: Date.now(), route, ok: null});
       await writeBars(threadId, result.bars);
       lastOperations.set(threadId, {at: Date.now(), route, ok: true});
+      const ignored = unknownFields(op);
       diagnostics.set(threadId, { source: "bb", lastCallSeq: diagnostics.get(threadId)?.lastCallSeq ?? 0, warning: null });
       const reminder = reminderStates.get(threadId);
       if (reminder) { reminder.hasPlan = true; reminder.sinceUpdate = 0; }
       bb.realtime.publish(DIAGNOSTICS_CHANGED, { threadId });
-      return { ok: true, text: `BB/${threadId}: ${describe(result.bar)}` };
+      return {
+        ok: true,
+        text: `BB/${threadId}: ${describe(result.bar)}` +
+          (ignored.length > 0 ? ` (ignored unknown field(s): ${ignored.join(", ")})` : ""),
+      };
     });
   }
 
@@ -357,6 +389,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
   async function refreshAnswers(threadId: string): Promise<void> {
     try {
+      // events are read only for a thread that has a plan waiting on a person
+      if (!(await readBars(threadId)).some(bar => bar.state === "needs_input")) return;
       const events = await recentEvents(threadId, ["client/turn/requested", "turn/input/accepted"]);
       const times = acceptedHumanRequests(events);
       if (!times.length) return;
@@ -480,7 +514,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("experimental_thread.events", ({ thread }) => {
     invalidate(thread.id);
     if (observedAgentThreads.has(thread.id)) void refreshAgents(thread.id);
-    void readBars(thread.id).then(bars => { if (bars.some(bar => bar.state === "needs_input")) void refreshAnswers(thread.id); });
+    void refreshAnswers(thread.id);
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("experimental_thread.events", ({ thread }) => {
@@ -676,22 +710,32 @@ export default async function plugin(bb: BbPluginApi) {
       },
     ],
     async run(argv, ctx) {
-      const json = argv.includes("--json");
-      const flag = argv.indexOf("--thread");
-      const value = flag === -1 ? undefined : argv[flag + 1];
-      if (flag !== -1 && (value === undefined || value.startsWith("--"))) {
-        return { exitCode: 1, stderr: "--thread needs a thread id: --thread <id>." };
+      let json = false;
+      let flagThread: string | undefined;
+      const rest: string[] = [];
+      for (let index = 0; index < argv.length; index++) {
+        const arg = argv[index]!;
+        if (arg === "--json") json = true;
+        else if (arg === "--thread" || arg.startsWith("--thread=")) {
+          const value = arg === "--thread" ? argv[++index] : arg.slice("--thread=".length);
+          if (value === undefined || value === "" || value.startsWith("--")) {
+            return { exitCode: 1, stderr: "--thread needs a thread id: --thread <id> or --thread=<id>." };
+          }
+          flagThread = value;
+        } else if (arg.startsWith("--") && arg !== "--help") {
+          return { exitCode: 1, stderr: `Unknown option ${arg}.\n${usage}` };
+        } else rest.push(arg);
       }
-      const threadId = flag === -1 ? ctx.threadId : value;
-      const rest = argv.filter(
-        (arg, index) => arg !== "--json" && (flag === -1 || (index !== flag && index !== flag + 1)),
-      );
+      const threadId = flagThread ?? ctx.threadId;
       const [command, ...params] = rest;
       if (command === undefined || command === "help" || command === "--help") {
         return { exitCode: 0, stdout: usage };
       }
       if (threadId === undefined || threadId === "") {
         return { exitCode: 1, stderr: "No thread: run it inside a thread or pass --thread <id>." };
+      }
+      if (command !== "op" && params.length > 0) {
+        return { exitCode: 1, stderr: `Unexpected argument${params.length > 1 ? "s" : ""}: ${params.join(" ")}.\n${usage}` };
       }
       switch (command) {
         case "diagnose": {

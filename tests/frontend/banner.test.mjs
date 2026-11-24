@@ -96,7 +96,7 @@ test('one and three plans need no Show all control', async () => {
     const slot = mount(() => fixture().slice(0, count));
     try {
       await waitFor(() => assert.equal(slot.getAllByRole('progressbar').length, count));
-      assert.equal(slot.queryByRole('button', { name: /Show all/ }), null);
+      assert.equal(slot.queryByRole('button', { name: /Show all/ }) === null, true);
     } finally { slot.unmount(); }
   }
 });
@@ -131,7 +131,7 @@ test('thread agents remain independent of plan visibility and preserve expansion
       model: null, state: 'running', tool: null, startedAt: Date.now(), endedAt: null }));
     let slot = mount(() => bars, undefined, undefined, () => agents);
     try {
-      if (!agentCount) { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); assert.equal(slot.queryByLabelText('Thread agents'), null); continue; }
+      if (!agentCount) { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); assert.equal(slot.queryByLabelText('Thread agents') === null, true); continue; }
       await slot.findByLabelText('Thread agents');
       assert.equal(slot.queryAllByText(/^Task /).length, Math.min(agentCount, 3));
       if (agentCount === 10) {
@@ -176,7 +176,7 @@ test('open approval count refreshes independently of plans', async () => {
   try {
     await slot.findByText('1 open approval request in this thread and its direct children');
     count = 0; await slot.emitRealtime('approvals-changed', {threadId:'fixture-thread'});
-    await waitFor(() => assert.equal(slot.queryByRole('status'), null));
+    await waitFor(() => assert.equal(slot.queryByRole('status') === null, true));
   } finally { slot.unmount(); }
 });
 
@@ -214,9 +214,9 @@ test('late agents RPC cannot overwrite realtime or another thread', async () => 
     await slot.emitRealtime('agents-changed',{threadId:'one',agents:[fresh]});
     await slot.findByText('New task');
     await act(async()=>resolveFirst({agents:[old]}));
-    assert.equal(slot.queryByText('Old task'),null);
+    assert.equal(slot.queryByText('Old task') === null, true);
     await slot.setComposerScope({kind:'thread',threadId:'two'});
-    await waitFor(()=>assert.equal(slot.queryByText('New task'),null));
+    await waitFor(()=>assert.equal(slot.queryByText('New task') === null, true));
   } finally {slot.unmount();}
 });
 
@@ -237,9 +237,9 @@ test('no plans does not claim hidden plans and collapsed summary retains agent e
   const slot=mount(()=>[],undefined,undefined,()=>agents);
   try {
     await slot.findByText('Failed task');
-    assert.equal(slot.queryByText('All plans are hidden.'),null);
+    assert.equal(slot.queryByText('All plans are hidden.') === null, true);
     fireEvent.click(slot.getByRole('button',{name:/Progress · 0/}));
-    assert.equal(slot.queryByText('Failed task'),null);
+    assert.equal(slot.queryByText('Failed task') === null, true);
     assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/Thread agents · 1.*1 errors.*0 unknown/);
   } finally {slot.unmount();}
 });
@@ -271,11 +271,11 @@ test('connected server pushes empty to running, completion, empty and a later he
   try {
     await waitFor(()=>assert.equal(reads,1));
     await act(async()=>{});
-    assert.equal(slot.queryByLabelText('Thread agents'),null);
+    assert.equal(slot.queryByLabelText('Thread agents') === null, true);
     rows=[row('first','First helper','pending',at)];await push();await slot.findByText('First helper');
     rows=[row('first','First helper','completed',at,at+1)];await push('thread.idle');
     await waitFor(()=>assert.ok(slot.getByText('Done')));
-    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('First helper'),null));
+    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('First helper') === null, true));
     rows=[row('second','Second helper','pending',at+2)];await push();await slot.findByText('Second helper');
     rows=[row('second','Second helper','error',at+2,at+3)];await push('thread.failed');
     await waitFor(()=>assert.ok(slot.getByText('Error')));
@@ -285,7 +285,7 @@ test('connected server pushes empty to running, completion, empty and a later he
     rows=[row('second','Second helper','pending',at+4)];await push();
     rows=[row('second','Second helper','completed',at+4,at+5)];await push('thread.idle');
     await waitFor(()=>assert.ok(slot.getByText('Done')));
-    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('Second helper'),null));
+    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('Second helper') === null, true));
     rows=[row('third','Third helper','pending',at+6)];await push();await slot.findByText('Third helper');
   } finally {slot.unmount();await h.dispose();}
 });
@@ -317,13 +317,13 @@ test('connected direct child goes idle while the parent stays collapsed across r
     assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/1 running/);
     slot.unmount(); slot=mountConnected();
     await waitFor(()=>assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/1 running/));
-    assert.equal(slot.queryByText('Child task'),null);
+    assert.equal(slot.queryByText('Child task') === null, true);
     const start=h.realtimeSignals.length;
     await h.emitThreadEvent('thread.idle',{thread:{...child,status:'idle',updatedAt:now+1,parentThreadId:'parent'}});
     await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(signal=>signal.channel==='agents-changed' && signal.payload.threadId==='parent')));
     for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
     await waitFor(()=>assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/0 running/));
-    assert.equal(slot.queryByText('Child task'),null);
+    assert.equal(slot.queryByText('Child task') === null, true);
   } finally {slot.unmount();await h.dispose();}
 });
 
@@ -346,7 +346,7 @@ test('connected initial nonempty agent snapshot is cleared by a server empty upd
     await h.emitThreadEvent('experimental_thread.events',{thread:{id:'root'}});
     await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(s=>s.channel==='agents-changed' && s.payload.agents.length===0)));
     for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
-    await waitFor(()=>assert.equal(slot.queryByText('Existing helper'),null));
+    await waitFor(()=>assert.equal(slot.queryByText('Existing helper') === null, true));
   } finally {slot.unmount();await h.dispose();}
 });
 
@@ -371,6 +371,112 @@ test('connected stale initial RPC cannot restore an agent after server empty upd
     await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(s=>s.channel==='agents-changed' && s.payload.agents.length===0)));
     for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
     await act(async()=>release());
-    assert.equal(slot.queryByText('Old helper'),null);
+    assert.equal(slot.queryByText('Old helper') === null, true);
   } finally {slot.unmount();await h.dispose();}
+});
+
+test('a finished plan is not auto-hidden before the helper list has loaded', async () => {
+  localStorage.clear();
+  let bars = [applyOp([fixture()[0]], { id: 'b0', state: 'done' }, 10000).bar];
+  const calls = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const slot = renderSlot(banner, {}, { context: { threadId: 'fixture-thread', projectId: null },
+    settings: { effects: false }, rpc: {
+      bars_get: () => ({ bars }),
+      agents_get: async () => { await gate; return { agents: [] }; },
+      approvals_get: () => ({ count: 0, incomplete: false }),
+      diagnostics_get: () => ({ diagnostic: { source: 'bb', warning: null, lastCallSeq: 0 } }),
+      bars_setVisibility: args => { calls.push(args); bars = bars.map(b => setVisibility(b, args.hidden, args.endedAt)); return { changed: true }; },
+    } });
+  try {
+    await slot.findByRole('progressbar');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 60)); });
+    assert.equal(calls.length, 0);
+    release();
+    await waitFor(() => assert.equal(calls.length, 1));
+  } finally { slot.unmount(); }
+});
+
+test('the one-second clock does not run for hidden or already handled plans', async () => {
+  localStorage.clear();
+  const ticks = [];
+  const original = globalThis.setInterval;
+  globalThis.setInterval = (fn, delay, ...rest) => { if (delay === 1000) ticks.push(delay); return original(fn, delay, ...rest); };
+  try {
+    const done = applyOp([fixture()[0]], { id: 'b0', state: 'done' }, 10000).bar;
+    const hidden = setVisibility(done, true, done.endedAt);
+    const handled = setVisibility(setVisibility(done, true, done.endedAt), false);
+    const slot = mount(() => [hidden, { ...handled, id: 'b1' }], undefined, { effects: false });
+    try {
+      await slot.findByRole('button', { name: /Progress/ });
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+      assert.equal(ticks.length, 0);
+    } finally { slot.unmount(); }
+    const open = mount(() => [fixture()[0]], undefined, { effects: false });
+    try {
+      await open.findByRole('progressbar');
+      assert.ok(ticks.length > 0);
+    } finally { open.unmount(); }
+  } finally { globalThis.setInterval = original; }
+});
+
+test('a finished bar stands still while a running one animates', async () => {
+  localStorage.clear();
+  const done = applyOp([fixture()[0]], { id: 'b0', state: 'done' }, 10000).bar;
+  const slot = mount(() => [done, { ...fixture()[1], id: 'run' }], undefined, { autoClose: false, effects: true });
+  try {
+    await slot.findAllByRole('progressbar');
+    const bars = slot.getAllByRole('progressbar');
+    const stillOf = bar => [...bar.querySelectorAll('.pp-wave, .pp-blink')].map(el => el.classList.contains('pp-still'));
+    const states = bars.map(stillOf);
+    assert.ok(states.some(list => list.length > 0 && list.every(Boolean)), 'done bar paused');
+    assert.ok(states.some(list => list.length > 0 && list.every(flag => !flag)), 'running bar animated');
+    assert.match(await readFile('app.tsx', 'utf8'), /\.pp-still \{ animation-play-state: paused; \}[\s\S]*\.pp-track \.pp-clock/);
+  } finally { slot.unmount(); }
+});
+
+test('a skipped step differs from a pending one in the step list', async () => {
+  localStorage.clear();
+  const bar = applyOp([], { id: 's', title: 'Skip', steps: [{ title: 'Skipped one', status: 'skipped' }, { title: 'Waiting one' }, { title: 'Third one' }] }, 1000).bar;
+  const slot = mount(() => [bar]);
+  try {
+    fireEvent.click(await slot.findByRole('button', { name: 'Show steps' }));
+    const inList = text => slot.getAllByText(text).find(el => el.closest('li'));
+    const skipped = inList('Skipped one');
+    const waiting = inList('Waiting one');
+    assert.ok(skipped.className.includes('line-through'));
+    assert.ok(!waiting.className.includes('line-through'));
+    assert.notEqual(skipped.previousSibling.getAttribute('style'), waiting.previousSibling.getAttribute('style'));
+  } finally { slot.unmount(); }
+});
+
+test('counters follow what is shown: hidden plans and faded helpers are not counted', async () => {
+  localStorage.clear();
+  const [one, two] = fixture();
+  const hiddenPlan = setVisibility(two, true);
+  const now = Date.now();
+  const agents = [
+    { id: 'a1', name: 'Alive', kind: null, model: null, state: 'running', tool: null, startedAt: now, endedAt: null },
+    { id: 'a2', name: 'Old done', kind: null, model: null, state: 'done', tool: null, startedAt: now - 60000, endedAt: now - 50000 },
+  ];
+  const slot = mount(() => [one, hiddenPlan], undefined, { autoClose: false, effects: false }, () => agents);
+  try {
+    await slot.findByRole('button', { name: /Progress · 1/ });
+    const header = await slot.findByRole('button', { name: /Thread agents · 1/ });
+    assert.match(header.textContent, /0 done/);
+    assert.ok(slot.getByRole('button', { name: /Hidden plans \(1\)/ }));
+  } finally { slot.unmount(); }
+});
+
+test('a finished helper leaves the list by the clock even with nothing else to tick', async () => {
+  localStorage.clear();
+  const now = Date.now();
+  const agents = [{ id: 'h', name: 'Helper', kind: null, model: null, state: 'done', tool: null, startedAt: now - 10000, endedAt: now - 3000 }];
+  const slot = mount(() => [], undefined, { autoClose: false, effects: false }, () => agents);
+  try {
+    await slot.findByLabelText('Thread agents');
+    // compare counts, never the element: a failed assert on a DOM node prints the whole page graph
+    await waitFor(() => assert.equal(slot.queryAllByLabelText('Thread agents').length, 0), { timeout: 4500 });
+  } finally { slot.unmount(); }
 });

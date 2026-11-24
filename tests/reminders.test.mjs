@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { newReminderState, observeWork } from "../reminders.ts";
 const work = seq => ({ seq, createdAt: 100, type: "item/completed", data: { item: { type: "fileRead" } } });
+const command = seq => ({ ...work(seq), data: { item: { type: "commandExecution" } } });
 const progress = seq => ({ ...work(seq), data: { item: { type: "toolCall", server: "bb", tool: "plan_progress", status: "completed" } } });
 
 test("only multiple current-turn work calls trigger the missing-plan reminder", () => {
@@ -17,13 +18,13 @@ test("only multiple current-turn work calls trigger the missing-plan reminder", 
 
 test("progress updates reset the stale counter; subagents do not increment it", () => {
   const state = newReminderState(100);
-  assert.equal(observeWork(state, [progress(1), ...[2,3,4,5,6].map(work)]), false);
-  assert.equal(observeWork(state, [progress(7), work(8)]), false);
+  assert.equal(observeWork(state, [progress(1), ...[2,3,4,5,6].map(command)]), false);
+  assert.equal(observeWork(state, [progress(7), command(8)]), false);
   assert.equal(state.sinceUpdate, 1);
   const child = { ...work(9), data: { parentToolCallId: "child", item: { type: "fileRead" } } };
   assert.equal(observeWork(state, [child]), false);
   assert.equal(state.sinceUpdate, 1);
-  assert.equal(observeWork(state, [10,11,12,13,14].map(work)), true);
+  assert.equal(observeWork(state, [10,11,12,13,14].map(command)), true);
 });
 
 test('agent-scoped work never advances the main thread reminder', () => {
@@ -73,4 +74,17 @@ test('failed or truncated ACP progress batches do not reset the stale-work count
   assert.equal(observeWork(state,[row]),false);assert.equal(state.sinceUpdate,5);
   row.seq=2;row.data.item.result.metadata.truncated=true;row.data.item.result.metadata.toolCalls[0].status='completed';
   observeWork(state,[row]);assert.equal(state.sinceUpdate,5);
+});
+
+test("with a bar in place reads do not count toward the stale-update reminder; edits and commands do", () => {
+  const state = newReminderState(100);
+  assert.equal(observeWork(state, [progress(1), ...[2,3,4,5,6,7,8,9].map(work)]), false);
+  assert.equal(state.sinceUpdate, 0);
+  const edit = seq => ({ ...work(seq), data: { item: { type: "fileChange" } } });
+  assert.equal(observeWork(state, [10,11,12,13].map(edit)), false);
+  assert.equal(observeWork(state, [command(14), edit(15)]), true);
+});
+
+test("without a bar reads still count toward the three-call reminder", () => {
+  assert.equal(observeWork(newReminderState(100), [work(1), work(2), work(3)]), true);
 });

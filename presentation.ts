@@ -27,6 +27,7 @@ export function visibilityReason(bar: Bar, now: number, seconds: number, hasRunn
   return "eligible-to-hide";
 }
 
-export function dueToHide(bar: Bar, now: number, seconds: number, hasRunningAgents: boolean): boolean {
+/** `hasRunningAgents` null: the helpers are not loaded yet, which never allows hiding. */
+export function dueToHide(bar: Bar, now: number, seconds: number, hasRunningAgents: boolean | null): boolean {
   return visibilityReason(bar, now, seconds, hasRunningAgents) === "eligible-to-hide";
 }

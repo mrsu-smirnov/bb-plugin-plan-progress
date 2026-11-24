@@ -90,10 +90,13 @@ function useBars(threadId: string | null): Bar[] {
 }
 
 /** The subagents of the thread's latest turn, pushed by the server as they change. */
-function useAgents(threadId: string | null): Agent[] {
+const NO_AGENTS: Agent[] = [];
+
+function useAgents(threadId: string | null): { agents: Agent[]; known: boolean } {
   const rpc = useRpc<typeof rpcContract>();
   const [loaded, setLoaded] = useState<{threadId: string; agents: Agent[]} | null>(null);
-  const agents = loaded?.threadId === threadId ? loaded.agents : [];
+  const known = loaded?.threadId === threadId;
+  const agents = known ? loaded.agents : NO_AGENTS;
   const agentVersion = useRef(0);
   useEffect(() => {
     if (threadId === null) return;
@@ -111,7 +114,7 @@ function useAgents(threadId: string | null): Agent[] {
     const update = payload as { threadId?: unknown; agents?: unknown } | null;
     if (update?.threadId === threadId && Array.isArray(update.agents)) { agentVersion.current++; if (threadId) setLoaded({ threadId, agents: update.agents as Agent[] }); }
   });
-  return agents;
+  return { agents, known };
 }
 
 function useApprovals(threadId: string | null): { count: number; incomplete: boolean } {
@@ -241,6 +244,8 @@ const STYLE = `
 .pp-glide { transition: width .3s cubic-bezier(.2,.8,.2,1), left .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1), background-color .4s; }
 .pp-wave { animation: pp-wave var(--pp-wave-dur) steps(${COLS}) infinite; }
 .pp-blink { animation: pp-blink var(--pp-blink-dur) step-end infinite; animation-delay: var(--pp-blink-delay); opacity: 0; }
+/* after the shorthands above, which would reset the play state */
+.pp-still { animation-play-state: paused; }
 .pp-track .pp-clock { display: none; }
 .pp-track:hover .pp-clock { display: inline; }
 .pp-track:hover .pp-label { display: none; }
@@ -254,6 +259,8 @@ function mask(image: string, extra: CSSProperties = {}): CSSProperties {
 }
 
 function Stream({ bar, light, effects }: { bar: Bar; light: Rgb; effects: boolean }) {
+  // a finished bar keeps its look; its animations stand still
+  const still = bar.state === "done" ? "pp-still" : "";
   const speed = bar.state === "running" ? SPEED : SPEED / 2;
   const dots: CSSProperties = {
     position: "absolute",
@@ -267,7 +274,7 @@ function Stream({ bar, light, effects }: { bar: Bar; light: Rgb; effects: boolea
       {/* the wave: dots where its blobs pass, fading in along the fill */}
       <div className="absolute inset-0" style={mask("linear-gradient(90deg, transparent 0, #000 67%)")}>
         <div
-          className={cn("absolute inset-0", effects && "pp-wave")}
+          className={cn("absolute inset-0", effects && "pp-wave", still)}
           style={{
             ...mask(WAVE, { maskSize: `${COLS * 3}px 22px`, WebkitMaskSize: `${COLS * 3}px 22px`, maskRepeat: "repeat-x" } as CSSProperties),
             ["--pp-wave-dur" as string]: `${(COLS / speed).toFixed(1)}s`,
@@ -285,7 +292,7 @@ function Stream({ bar, light, effects }: { bar: Bar; light: Rgb; effects: boolea
           {FLICKER.map((tile, k) => (
             <div
               key={k}
-              className="pp-blink absolute inset-0"
+              className={cn("pp-blink absolute inset-0", still)}
               style={{
                 top: 1,
                 backgroundColor: rgb(light),
@@ -468,11 +475,12 @@ function StepRow({ step, color, now }: { step: Step; color: string; now: number 
         : step.status === "active"
           ? color
           : "rgba(168,166,158,.5)";
+  const skipped = step.status === "skipped";
   return (
     <li className="flex items-center gap-2 py-0.5">
       <span
         className={cn("size-1.5 shrink-0 rounded-full", step.status === "active" && "animate-pulse")}
-        style={{ backgroundColor: dot }}
+        style={{ backgroundColor: skipped ? color : dot, ...(skipped ? { opacity: 0.45 } : {}) }}
       />
       <span
         className={cn(
@@ -480,6 +488,7 @@ function StepRow({ step, color, now }: { step: Step; color: string; now: number 
           step.status === "active" && "font-medium text-foreground",
           step.status !== "active" && "text-muted-foreground",
           step.status === "error" && "text-destructive",
+          skipped && "line-through opacity-60",
         )}
       >
         {step.title}
@@ -621,18 +630,21 @@ function Robot() {
   );
 }
 
+const AGENT_KEEP_MS = 5_000;
+
 /** Thread-level list; expansion is independent of plan visibility. */
 function AgentStrips({ agents, now, effects, threadId }: { agents: Agent[]; now: number; effects: boolean; threadId: string }) {
   const [expanded, setExpanded] = useCollapsed(`agents:${threadId}`);
-  const ordered = visibleAgents(agents, now, 5_000).sort((a, b) => {
+  const ordered = visibleAgents(agents, now, AGENT_KEEP_MS).sort((a, b) => {
     const rank: Record<AgentState, number> = { error: 0, running: 1, unknown: 2, done: 3 };
     return rank[a.state] - rank[b.state];
   });
-  const count = (state: AgentState) => agents.filter(agent => agent.state === state).length;
+  // the counts describe what is shown or opens with "Show all"
+  const count = (state: AgentState) => ordered.filter(agent => agent.state === state).length;
   return <section className="border-t border-border/60 px-3 py-2" aria-label="Thread agents">
     <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}
       className="flex min-h-8 w-full flex-wrap items-center gap-2 text-left text-xs text-muted-foreground">
-      <Robot /><span className="font-medium text-foreground">Thread agents · {agents.length}</span>
+      <Robot /><span className="font-medium text-foreground">Thread agents · {ordered.length}</span>
       <span>{count("running")} running · {count("done")} done · {count("error")} errors · {count("unknown")} unknown</span>
       {ordered.length > 3 && <span>{expanded ? "Show fewer" : `Show all (${ordered.length})`}</span>}
     </button>
@@ -773,7 +785,7 @@ function Banner() {
   const rpc = useRpc<typeof rpcContract>();
   const bars = useBars(threadId);
   const warning = useProgressWarning(threadId);
-  const allAgents = useAgents(threadId);
+  const { agents: allAgents, known: agentsKnown } = useAgents(threadId);
   const approvals = useApprovals(threadId);
   const options = useOptions();
   const [collapsed, setCollapsed] = useCollapsed(threadId);
@@ -782,8 +794,12 @@ function Banner() {
   const showAll = view.threadId === threadId && view.all;
   const showHidden = view.threadId === threadId && view.hidden;
   const [failure, setFailure] = useState<{ threadId: string; text: string } | null>(null);
-  const now = useNow(bars.some(bar => bar.state !== "done") || allAgents.length > 0 || (options.autoClose && bars.length > 0));
-  const hasRunningAgents = allAgents.some(agent => agent.state === "running");
+  const hasRunningAgents = agentsKnown ? allAgents.some(agent => agent.state === "running") : null;
+  // the clock runs for an open visible plan, a running helper, or a finished plan auto-close may still hide
+  const now = useNow(
+    bars.some(bar => bar.hidden === undefined && bar.state !== "done") || hasRunningAgents === true ||
+    (options.autoClose && bars.some(bar => bar.state === "done" && bar.hidden === undefined &&
+      bar.endedAt !== undefined && bar.autoCloseHandledAt !== bar.endedAt)));
   const setVisibility = useCallback(async (id: string, hidden: boolean, endedAt?: number) => {
     if (threadId === null) return;
     try {
@@ -824,7 +840,8 @@ function Banner() {
     if (changed !== undefined) chime(changed.state);
   }, [bars, options.sounds, threadId]);
 
-  if (threadId === null || (bars.length === 0 && !warning && allAgents.length === 0 && approvals.count === 0 && !approvals.incomplete)) return null;
+  const shownAgents = visibleAgents(allAgents, now, AGENT_KEEP_MS);
+  if (threadId === null || (bars.length === 0 && !warning && shownAgents.length === 0 && approvals.count === 0 && !approvals.incomplete)) return null;
   const visible = orderedPlans(bars.filter(bar => bar.hidden === undefined));
   const hidden = orderedPlans(bars.filter(bar => bar.hidden !== undefined));
   const shown = showAll ? visible : visible.slice(0, VISIBLE_PLANS);
@@ -841,15 +858,15 @@ function Banner() {
       <button type="button" aria-expanded={!collapsed} aria-controls={controls}
         onClick={() => setCollapsed(!collapsed)}
         className="flex min-h-10 w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground">
-        <span className="font-medium text-foreground">{collapsed ? "▸" : "▾"} Progress · {bars.length}</span>
+        <span className="font-medium text-foreground">{collapsed ? "▸" : "▾"} Progress · {visible.length}</span>
         {running > 0 && <span>{running} active</span>}
         {needsInput > 0 && <span style={{ color: STATE_COLOR.needs_input }}>{needsInput} {needsInput === 1 ? "needs" : "need"} your answer</span>}
         {errors > 0 && <span style={{ color: STATE_COLOR.error }}>{errors} {errors === 1 ? "error" : "errors"}</span>}
         {collapsed && hidden.length > 0 && <span>{hidden.length} hidden</span>}
-        {collapsed && allAgents.length > 0 && <span>Thread agents · {allAgents.length} · {allAgents.filter(a => a.state === "running").length} running · {allAgents.filter(a => a.state === "error").length} errors · {allAgents.filter(a => a.state === "unknown").length} unknown</span>}
+        {collapsed && shownAgents.length > 0 && <span>Thread agents · {shownAgents.length} · {shownAgents.filter(a => a.state === "running").length} running · {shownAgents.filter(a => a.state === "error").length} errors · {shownAgents.filter(a => a.state === "unknown").length} unknown</span>}
       </button>
       {(approvals.count > 0 || approvals.incomplete) && <div role="status" className="px-3 py-1 text-xs text-amber-700 dark:text-amber-400">{approvals.count} open approval {approvals.count === 1 ? "request" : "requests"} in this thread and its direct children{approvals.incomplete ? " · some approvals could not be checked" : ""}</div>}
-      {!collapsed && allAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
+      {!collapsed && shownAgents.length > 0 && <AgentStrips agents={allAgents} now={now} effects={options.effects} threadId={threadId} />}
       {!collapsed && <div id={controls}>
         <div className="divide-y divide-border/60">
           {shown.map(bar => <BarRow key={`${bar.id}:${bar.createdAt}`} bar={bar} now={now} effects={options.effects}

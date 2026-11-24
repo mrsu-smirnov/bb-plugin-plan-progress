@@ -23,7 +23,7 @@ import { AGENTS_CHANGED, agentFromChild, agentsFromRows, flattenTurnRows, type A
 import { acceptedHumanRequests, latestChildRun, backgroundEvidence, type EvidenceEvent } from "./evidence";
 import { hostContract } from "./host-contract";
 import { advanceDiagnostic, isMainEvent, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
-import { newReminderState, observeWork, type ReminderState } from "./reminders";
+import { isCallStart, newReminderState, observeWork, releaseModeFor, type ReleaseMode, type ReminderState } from "./reminders";
 import { visibilityReason } from "./presentation";
 import { version as pluginVersion } from "./package.json";
 
@@ -111,7 +111,7 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     automaticReminders: {
       type: "boolean", label: "Automatic progress reminders",
-      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update (once a bar exists, file reads are not counted). Sent only once the next work call has begun after that threshold (the provider shows it to the agent at the next boundary, so a reminder sent after the last call arrives after the answer; if that call is the last and quick it still can), and after a fresh check that the turn is still running; a turn ending in the instant before delivery can still be restarted by it. Missing history can suppress it.",
+      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update (once a bar exists, file reads are not counted). Sent only once the work goes on after that threshold (the provider shows it to the agent at the next boundary, so a reminder sent after the last call arrives after the answer; if the next call is the last and quick it still can): for Claude Code, Codex and OpenCode v2 when the next work call begins; for other providers (ACP, Pi, unknown) only between calls, after the next work call completes with no tool call running, since a message at a call's start can interrupt it there. Always after a fresh check that the turn is still running; a turn ending in the instant before delivery can still be restarted by it. Missing history can suppress it.",
       default: true,
     },
     isolateClaude: {
@@ -171,6 +171,21 @@ export default async function plugin(bb: BbPluginApi) {
   const diagnosticCursors = new Map<string, number>();
   const diagnosticPulls = new Map<string, Promise<void>>();
   const reminderStates = new Map<string, ReminderState>();
+  // Provider per thread, remembered from event payloads; read once otherwise.
+  const providers = new Map<string, string | null>();
+  async function providerFor(threadId: string): Promise<string | null> {
+    const known = providers.get(threadId);
+    if (known !== undefined) return known;
+    try {
+      const thread = await bb.sdk.threads.get({ threadId });
+      const id = typeof thread.providerId === "string" ? thread.providerId : null;
+      providers.set(threadId, id);
+      return id;
+    } catch { return null; } // unknown: the safe "between calls" mode
+  }
+  const rememberProvider = (thread: {id: string; providerId?: string | null}) => {
+    if (typeof thread.providerId === "string") providers.set(thread.id, thread.providerId);
+  };
   const activeThreads = new Set<string>();
   // Observation only; event history supplies call evidence after plugin reload.
   const lastOperations = new Map<string, {at: number; route: "native" | "cli"; ok: boolean | null}>();
@@ -205,13 +220,17 @@ export default async function plugin(bb: BbPluginApi) {
   // running and no turn completed after the events already read. Anything
   // unreadable counts as "not running". A turn ending after this look can
   // still slip through; the SDK offers no way to close that last window.
-  async function turnStillRunning(threadId: string, afterSeq: number): Promise<boolean> {
+  // Between calls, a call that began after those events means "not now".
+  async function turnStillRunning(threadId: string, afterSeq: number, mode: ReleaseMode): Promise<"running" | "ended" | "call-started"> {
     try {
       const thread = await bb.sdk.threads.get({ threadId });
-      if (thread.status !== "active") return false;
-      const later = await bb.sdk.threads.events.list({ threadId, types: ["turn/completed"], afterSeq: String(afterSeq), limit: "100" });
-      return !later.some(event => isMainEvent(event));
-    } catch { return false; }
+      if (thread.status !== "active") return "ended";
+      const between = mode === "between-calls";
+      const later = await bb.sdk.threads.events.list({ threadId,
+        types: between ? ["turn/completed", "item/started"] : ["turn/completed"], afterSeq: String(afterSeq), limit: "100" });
+      if (later.some(event => event.type === "turn/completed" && isMainEvent(event))) return "ended";
+      return between && later.some(event => isCallStart(event)) ? "call-started" : "running";
+    } catch { return "ended"; }
   }
   async function refreshDiagnostic(threadId: string, allowSend = false): Promise<void> {
     if (!live(threadId)) return;
@@ -239,8 +258,13 @@ export default async function plugin(bb: BbPluginApi) {
         if (first || events.length < 100) { caughtUp = true; break; }
       }
       if (!live(threadId)) return;
+      const mode = releaseModeFor(await providerFor(threadId));
+      if (!live(threadId)) return;
       const before = JSON.stringify(reminder);
-      const due = observeWork(reminder, rows);
+      // After a reload the latest window may not reach the events already
+      // read: calls started in between would be invisible.
+      const gap = initial && initialWindowLimited && (rows[0]?.seq ?? 0) > reminder.lastSeq;
+      const due = observeWork(reminder, rows, mode, {gap});
       const covered = history.get(threadId);
       history.set(threadId, {fromSeq: covered?.fromSeq ?? rows[0]?.seq ?? null,
         throughSeq: cursor ?? 0, initialWindowLimited: initial ? initialWindowLimited : covered?.initialWindowLimited ?? true,
@@ -250,6 +274,7 @@ export default async function plugin(bb: BbPluginApi) {
         const bars = await readBars(threadId);
         if (!live(threadId)) return;
         const updatedThisTurn = bars.some(bar => bar.updatedAt >= reminder.since);
+        const unsent = {delivery: reminder.delivery, attemptedAt: reminder.attemptedAt};
         reminder.sent = true;
         reminder.delivery = "skipped";
         if (!updatedThisTurn || bars.some(bar => bar.state === "running")) {
@@ -259,8 +284,13 @@ export default async function plugin(bb: BbPluginApi) {
           try {
             // steer on an idle thread starts a turn and the SDK has no "only
             // into a running turn" option, so confirm the turn is still going
-            if (!await turnStillRunning(threadId, cursor ?? 0)) {
-              if (!live(threadId)) return;
+            const look = await turnStillRunning(threadId, cursor ?? 0, mode);
+            if (!live(threadId)) return;
+            if (look === "call-started") {
+              // not this time: wait for the next completion with nothing open
+              Object.assign(reminder, unsent, {sent: false, continued: false});
+              if (!await persistReminder(threadId, reminder) || !live(threadId)) return;
+            } else if (look === "ended") {
               reminder.delivery = "skipped";
             } else {
             const delivered = await bb.sdk.threads.send({threadId, mode: "steer", input: [{type: "text",
@@ -518,6 +548,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("experimental_thread.events", ({ thread }) => {
+    rememberProvider(thread);
     if (thread.status === "active") activeThreads.add(thread.id);
     else if (thread.status) activeThreads.delete(thread.id);
     if (activeThreads.has(thread.id) || reminderStates.has(thread.id) || diagnostics.has(thread.id)) void refreshDiagnostic(thread.id, true);
@@ -556,6 +587,7 @@ export default async function plugin(bb: BbPluginApi) {
     diagnostics.delete(thread.id);
     diagnosticCursors.delete(thread.id);
     reminderStates.delete(thread.id);
+    providers.delete(thread.id);
     activeThreads.delete(thread.id);
     history.delete(thread.id);
     diagnosticDirty.delete(thread.id);
@@ -567,6 +599,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
   // Activation alone does not establish that a human answered.
   bb.events.on("thread.active", ({ thread }) => {
+    rememberProvider(thread);
     activeThreads.add(thread.id);
     void refreshDiagnostic(thread.id, true);
   });

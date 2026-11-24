@@ -22,7 +22,7 @@ import {
 import { AGENTS_CHANGED, agentFromChild, agentsFromRows, flattenTurnRows, type Agent, type ChildThread } from "./agents";
 import { acceptedHumanRequests, latestChildRun, backgroundEvidence, type EvidenceEvent } from "./evidence";
 import { hostContract } from "./host-contract";
-import { advanceDiagnostic, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
+import { advanceDiagnostic, isMainEvent, DIAGNOSTICS_CHANGED, NO_DIAGNOSTIC, type ProgressDiagnostic } from "./diagnostics";
 import { newReminderState, observeWork, type ReminderState } from "./reminders";
 import { visibilityReason } from "./presentation";
 import { version as pluginVersion } from "./package.json";
@@ -112,7 +112,7 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     automaticReminders: {
       type: "boolean", label: "Automatic progress reminders",
-      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update. Missing history can suppress it. Never starts a new turn.",
+      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update (once a bar exists, file reads are not counted). Sent only after a fresh check that the turn is still running; a turn ending in the instant before delivery can still be restarted by it. Missing history can suppress it.",
       default: true,
     },
     isolateClaude: {
@@ -202,6 +202,18 @@ export default async function plugin(bb: BbPluginApi) {
       return true;
     });
   }
+  // A fresh look right before a reminder is sent: the thread reports itself
+  // running and no turn completed after the events already read. Anything
+  // unreadable counts as "not running". A turn ending after this look can
+  // still slip through; the SDK offers no way to close that last window.
+  async function turnStillRunning(threadId: string, afterSeq: number): Promise<boolean> {
+    try {
+      const thread = await bb.sdk.threads.get({ threadId });
+      if (thread.status !== "active") return false;
+      const later = await bb.sdk.threads.events.list({ threadId, types: ["turn/completed"], afterSeq: String(afterSeq), limit: "100" });
+      return !later.some(event => isMainEvent(event));
+    } catch { return false; }
+  }
   async function refreshDiagnostic(threadId: string, allowSend = false): Promise<void> {
     if (!live(threadId)) return;
     const busy = diagnosticPulls.get(threadId);
@@ -246,11 +258,18 @@ export default async function plugin(bb: BbPluginApi) {
           reminder.attemptedAt = Date.now();
           if (!await persistReminder(threadId, reminder) || !live(threadId)) return;
           try {
+            // steer on an idle thread starts a turn and the SDK has no "only
+            // into a running turn" option, so confirm the turn is still going
+            if (!await turnStillRunning(threadId, cursor ?? 0)) {
+              if (!live(threadId)) return;
+              reminder.delivery = "skipped";
+            } else {
             const delivered = await bb.sdk.threads.send({threadId, mode: "steer", input: [{type: "text",
               visibility: "agent-only", mentions: [],
               text: "BB plan-progress automatic reminder: several work calls have run. Create or update BB's plan_progress bar now for the remaining work (Claude: mcp__bb-bridge__plan_progress). A bar is UI bookkeeping, not a subagent or file edit. If the task is already finished, do not invent a plan retroactively. Do not repeat completed work. If the tool is unavailable, report that once."}]});
             if (!live(threadId)) return;
             reminder.delivery = delivered.delivery === "sent" ? "sent" : "unknown";
+            }
           } catch { if (!live(threadId)) return; reminder.delivery = "send-error"; }
         }
       }

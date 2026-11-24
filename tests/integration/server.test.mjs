@@ -86,6 +86,7 @@ test("a missing-plan reminder uses strict steering once and never sends from an 
   let events = [];
   const sent = [];
   const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
+    get: async () => ({ status: "active" }),
     events: { list: async args => events.filter(e => e.seq > Number(args.afterSeq ?? 0))
       .sort((a,b) => args.order === "desc" ? b.seq-a.seq : a.seq-b.seq) },
     timeline: async () => ({ rows: [], activeBackgroundCommands: [] }),
@@ -384,6 +385,7 @@ test('a delayed reminder send cannot restore deleted state after thread deletion
   const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
     ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({status:'active'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
     send:async()=>{started();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
   }}});
@@ -418,6 +420,7 @@ test('diagnose only observes: no send even when a stored reminder threshold is d
 test('incremental history reaches its tail before any reminder decision', async () => {
   let rows=[];let sends=0;
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({status:'active'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq).slice(0,100)},
     send:async()=>{sends++;return {delivery:'sent'};},
   }}});
@@ -441,6 +444,7 @@ test('old send completion after plugin reload cannot overwrite the new generatio
   const rows=[{seq:1,createdAt:100,type:'turn/started',scope:{kind:'turn',turnId:'a'},data:{}},
     ...[2,3,4].map(seq=>({seq,createdAt:seq+100,type:'item/completed',scope:{kind:'turn',turnId:'a'},data:{item:{type:'fileRead'}}}))];
   const {bb,harness:h}=createFakePluginHost({pluginId:'plan-progress',sdk:{threads:{
+    get:async()=>({status:'active'}),
     events:{list:async args=>rows.filter(e=>e.seq>Number(args.afterSeq??0)).sort((a,b)=>args.order==='desc'?b.seq-a.seq:a.seq-b.seq)},
     send:async()=>{entered();return await new Promise(resolve=>{release=()=>resolve({delivery:'sent'});});},
   }}});let current=h;
@@ -551,4 +555,30 @@ test("answer evidence is read only while a plan waits on a person, and a failed 
     } finally { process.off("unhandledRejection", record); }
     assert.deepEqual(rejections, []);
   } finally { await h.dispose(); }
+});
+
+test("a reminder is not sent when the turn ended during the final recheck, or the thread is no longer running", async () => {
+  for (const ending of ["completed-event", "idle-status"]) {
+    const sent = [];
+    const rows = [{ seq: 1, createdAt: 100, type: "turn/started", scope: { kind: "turn", turnId: "a" }, data: {} },
+      ...[2, 3, 4].map(seq => ({ seq, createdAt: seq + 100, type: "item/completed", scope: { kind: "turn", turnId: "a" }, data: { item: { type: "fileRead" } } }))];
+    const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress", sdk: { threads: {
+      // the turn finishes while the plugin is looking
+      get: async () => {
+        if (ending === "completed-event") rows.push({ seq: 5, createdAt: 200, type: "turn/completed", scope: { kind: "turn", turnId: "a" }, data: {} });
+        return { status: ending === "idle-status" ? "idle" : "active" };
+      },
+      events: { list: async args => rows.filter(e => (!args.types || args.types.includes(e.type)) && e.seq > Number(args.afterSeq ?? 0))
+        .sort((a, b) => args.order === "desc" ? b.seq - a.seq : a.seq - b.seq) },
+      send: async args => { sent.push(args); return { ok: true, delivery: "sent" }; },
+    } } });
+    try {
+      await plugin(bb);
+      await h.emitThreadEvent("thread.active", { thread: { id: "thread-test" } });
+      await h.callRpc("diagnostics_get", { threadId: "thread-test" });
+      assert.equal(sent.length, 0, ending);
+      const report = JSON.parse((await h.runCli(["diagnose", "--json"], { threadId: "thread-test" })).stdout);
+      assert.equal(report.reminder.delivery, "skipped", ending);
+    } finally { await h.dispose(); }
+  }
 });

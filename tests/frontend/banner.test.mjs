@@ -96,7 +96,7 @@ test('one and three plans need no Show all control', async () => {
     const slot = mount(() => fixture().slice(0, count));
     try {
       await waitFor(() => assert.equal(slot.getAllByRole('progressbar').length, count));
-      assert.equal(slot.queryByRole('button', { name: /Show all/ }), null);
+      assert.equal(slot.queryByRole('button', { name: /Show all/ }) === null, true);
     } finally { slot.unmount(); }
   }
 });
@@ -131,7 +131,7 @@ test('thread agents remain independent of plan visibility and preserve expansion
       model: null, state: 'running', tool: null, startedAt: Date.now(), endedAt: null }));
     let slot = mount(() => bars, undefined, undefined, () => agents);
     try {
-      if (!agentCount) { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); assert.equal(slot.queryByLabelText('Thread agents'), null); continue; }
+      if (!agentCount) { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); assert.equal(slot.queryByLabelText('Thread agents') === null, true); continue; }
       await slot.findByLabelText('Thread agents');
       assert.equal(slot.queryAllByText(/^Task /).length, Math.min(agentCount, 3));
       if (agentCount === 10) {
@@ -176,7 +176,7 @@ test('open approval count refreshes independently of plans', async () => {
   try {
     await slot.findByText('1 open approval request in this thread and its direct children');
     count = 0; await slot.emitRealtime('approvals-changed', {threadId:'fixture-thread'});
-    await waitFor(() => assert.equal(slot.queryByRole('status'), null));
+    await waitFor(() => assert.equal(slot.queryByRole('status') === null, true));
   } finally { slot.unmount(); }
 });
 
@@ -214,9 +214,9 @@ test('late agents RPC cannot overwrite realtime or another thread', async () => 
     await slot.emitRealtime('agents-changed',{threadId:'one',agents:[fresh]});
     await slot.findByText('New task');
     await act(async()=>resolveFirst({agents:[old]}));
-    assert.equal(slot.queryByText('Old task'),null);
+    assert.equal(slot.queryByText('Old task') === null, true);
     await slot.setComposerScope({kind:'thread',threadId:'two'});
-    await waitFor(()=>assert.equal(slot.queryByText('New task'),null));
+    await waitFor(()=>assert.equal(slot.queryByText('New task') === null, true));
   } finally {slot.unmount();}
 });
 
@@ -237,9 +237,9 @@ test('no plans does not claim hidden plans and collapsed summary retains agent e
   const slot=mount(()=>[],undefined,undefined,()=>agents);
   try {
     await slot.findByText('Failed task');
-    assert.equal(slot.queryByText('All plans are hidden.'),null);
+    assert.equal(slot.queryByText('All plans are hidden.') === null, true);
     fireEvent.click(slot.getByRole('button',{name:/Progress · 0/}));
-    assert.equal(slot.queryByText('Failed task'),null);
+    assert.equal(slot.queryByText('Failed task') === null, true);
     assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/Thread agents · 1.*1 errors.*0 unknown/);
   } finally {slot.unmount();}
 });
@@ -271,11 +271,11 @@ test('connected server pushes empty to running, completion, empty and a later he
   try {
     await waitFor(()=>assert.equal(reads,1));
     await act(async()=>{});
-    assert.equal(slot.queryByLabelText('Thread agents'),null);
+    assert.equal(slot.queryByLabelText('Thread agents') === null, true);
     rows=[row('first','First helper','pending',at)];await push();await slot.findByText('First helper');
     rows=[row('first','First helper','completed',at,at+1)];await push('thread.idle');
     await waitFor(()=>assert.ok(slot.getByText('Done')));
-    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('First helper'),null));
+    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('First helper') === null, true));
     rows=[row('second','Second helper','pending',at+2)];await push();await slot.findByText('Second helper');
     rows=[row('second','Second helper','error',at+2,at+3)];await push('thread.failed');
     await waitFor(()=>assert.ok(slot.getByText('Error')));
@@ -285,7 +285,7 @@ test('connected server pushes empty to running, completion, empty and a later he
     rows=[row('second','Second helper','pending',at+4)];await push();
     rows=[row('second','Second helper','completed',at+4,at+5)];await push('thread.idle');
     await waitFor(()=>assert.ok(slot.getByText('Done')));
-    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('Second helper'),null));
+    rows=[];await push();await waitFor(()=>assert.equal(slot.queryByText('Second helper') === null, true));
     rows=[row('third','Third helper','pending',at+6)];await push();await slot.findByText('Third helper');
   } finally {slot.unmount();await h.dispose();}
 });
@@ -317,13 +317,13 @@ test('connected direct child goes idle while the parent stays collapsed across r
     assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/1 running/);
     slot.unmount(); slot=mountConnected();
     await waitFor(()=>assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/1 running/));
-    assert.equal(slot.queryByText('Child task'),null);
+    assert.equal(slot.queryByText('Child task') === null, true);
     const start=h.realtimeSignals.length;
     await h.emitThreadEvent('thread.idle',{thread:{...child,status:'idle',updatedAt:now+1,parentThreadId:'parent'}});
     await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(signal=>signal.channel==='agents-changed' && signal.payload.threadId==='parent')));
     for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
     await waitFor(()=>assert.match(slot.getByRole('button',{name:/Progress · 0/}).textContent,/0 running/));
-    assert.equal(slot.queryByText('Child task'),null);
+    assert.equal(slot.queryByText('Child task') === null, true);
   } finally {slot.unmount();await h.dispose();}
 });
 
@@ -346,7 +346,7 @@ test('connected initial nonempty agent snapshot is cleared by a server empty upd
     await h.emitThreadEvent('experimental_thread.events',{thread:{id:'root'}});
     await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(s=>s.channel==='agents-changed' && s.payload.agents.length===0)));
     for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
-    await waitFor(()=>assert.equal(slot.queryByText('Existing helper'),null));
+    await waitFor(()=>assert.equal(slot.queryByText('Existing helper') === null, true));
   } finally {slot.unmount();await h.dispose();}
 });
 
@@ -371,7 +371,7 @@ test('connected stale initial RPC cannot restore an agent after server empty upd
     await waitFor(()=>assert.ok(h.realtimeSignals.slice(start).some(s=>s.channel==='agents-changed' && s.payload.agents.length===0)));
     for(const signal of h.realtimeSignals.slice(start)) await slot.emitRealtime(signal.channel,signal.payload);
     await act(async()=>release());
-    assert.equal(slot.queryByText('Old helper'),null);
+    assert.equal(slot.queryByText('Old helper') === null, true);
   } finally {slot.unmount();await h.dispose();}
 });
 
@@ -466,5 +466,17 @@ test('counters follow what is shown: hidden plans and faded helpers are not coun
     const header = await slot.findByRole('button', { name: /Thread agents · 1/ });
     assert.match(header.textContent, /0 done/);
     assert.ok(slot.getByRole('button', { name: /Hidden plans \(1\)/ }));
+  } finally { slot.unmount(); }
+});
+
+test('a finished helper leaves the list by the clock even with nothing else to tick', async () => {
+  localStorage.clear();
+  const now = Date.now();
+  const agents = [{ id: 'h', name: 'Helper', kind: null, model: null, state: 'done', tool: null, startedAt: now - 10000, endedAt: now - 3000 }];
+  const slot = mount(() => [], undefined, { autoClose: false, effects: false }, () => agents);
+  try {
+    await slot.findByLabelText('Thread agents');
+    // compare counts, never the element: a failed assert on a DOM node prints the whole page graph
+    await waitFor(() => assert.equal(slot.queryAllByLabelText('Thread agents').length, 0), { timeout: 4500 });
   } finally { slot.unmount(); }
 });

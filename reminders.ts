@@ -53,7 +53,8 @@ export function observeWork(state: ReminderState, events: unknown[]): boolean {
     if (!item || item.tool === "ToolSearch" || source === "claude-original") continue;
     if (!["fileRead", "fileChange", "commandExecution", "toolCall", "mcpToolCall"].includes(item.type ?? "")) continue;
     state.work++;
-    state.sinceUpdate++;
+    // with a bar already there, reading is not work the bar has fallen behind on
+    if (!(state.hasPlan && item.type === "fileRead")) state.sinceUpdate++;
   }
   return (state.turnId === null || state.rootConfirmed) && !state.finished && !state.sent && ((!state.hasPlan && state.work >= 3) || (state.hasPlan && state.sinceUpdate >= 6));
 }

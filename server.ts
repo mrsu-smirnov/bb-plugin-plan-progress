@@ -111,7 +111,7 @@ export default async function plugin(bb: BbPluginApi) {
   const settings = bb.settings.define({
     automaticReminders: {
       type: "boolean", label: "Automatic progress reminders",
-      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update (once a bar exists, file reads are not counted). Sent only after a fresh check that the turn is still running; a turn ending in the instant before delivery can still be restarted by it. Missing history can suppress it.",
+      description: "One attempt per observed root turn after 3 work calls without a bar or 6 without an update (once a bar exists, file reads are not counted). Sent only once the next work call has begun after that threshold (the provider shows it to the agent at the next boundary, so a reminder sent after the last call arrives after the answer; if that call is the last and quick it still can), and after a fresh check that the turn is still running; a turn ending in the instant before delivery can still be restarted by it. Missing history can suppress it.",
       default: true,
     },
     isolateClaude: {
@@ -226,7 +226,7 @@ export default async function plugin(bb: BbPluginApi) {
       let caughtUp = false;
       for (let page = 0; page < 5; page++) {
         const events = await bb.sdk.threads.events.list({ threadId,
-          types: ["item/completed", "turn/started", "turn/completed"], limit: "100",
+          types: ["item/started", "item/completed", "turn/started", "turn/completed"], limit: "100",
           ...(cursor === undefined ? {order: "desc" as const} : {afterSeq: String(cursor)}) });
         if (!live(threadId)) return;
         const first = cursor === undefined;

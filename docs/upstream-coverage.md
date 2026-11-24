@@ -4,6 +4,44 @@ The detailed baseline inventory below describes **released BB 0.4.0**, not an
 assertion that every difference is still present in later releases. Keep this inventory
 available as a current document instead of relying on old Git history.
 
+## 0.6.2 changes
+
+Fix release: one change in the reminder logic.
+
+**Changed**
+
+- A reminder whose threshold (3 calls without a bar, 6 without an update) is
+  reached is sent only after a later `item/started` of a work call in the same
+  root turn. Starts of `plan_progress` (BB or original) and `ToolSearch`, starts
+  that precede the threshold by `seq` (parallel calls), helper-scope starts and
+  starts after `turn/completed` do not count. Counting by `item/completed` is
+  unchanged. `refreshDiagnostic` now also requests `item/started`; diagnostics
+  ignore these rows. Saved state gets two optional fields (`armedSeq`,
+  `continued`); records without them are read and re-armed.
+
+**Based on**: the event log of one Claude Code thread: 6 reminders, all accepted
+into the running turn, none started a new turn, 2 arrived after the final
+answer (the provider hands a steer message to the agent only at the next
+boundary: the next tool result or after a finished answer).
+
+**Checked** by unit tests and integration tests (built plugin in the SDK fake
+host) that fail on the 0.6.1 logic.
+
+**Not checked**
+
+- Other providers beyond single probes on 0.6.1: OpenCode v2 with Claude Haiku
+  showed the same late delivery (reminder accepted into the turn, shown after
+  the final answer); Codex showed the reminder before the final answer. One run
+  each; Pi not run.
+- A call that is last and quick can still receive the reminder after the answer.
+- The start of an ACP code wrapper (`execute`) counts as a work call; its
+  inner calls are visible only at completion.
+- With `item/started` rows the 100-event window and 5-page read cover fewer
+  turns than before.
+- No live run of 0.6.2 with a real agent before release; replaying the recorded
+  event logs through the new logic removed both late reminders and kept the
+  four timely ones.
+
 ## 0.6.1 changes
 
 Fix release; no new features. Test counts of this release are in the pull

@@ -63,11 +63,17 @@ proof that an existing provider session was restarted with it.
 The agent receives an explicit rule for tasks with three or more actions,
 including read-only work. The plugin can send at most one automatic reminder
 per active turn after three work calls without a bar or six without an update
-(once a bar exists, file reads are not counted). BB's API has no way to send
-"only into a running turn": a steering message sent to an idle thread starts a
-turn. So the plugin checks that the thread is still running right before the
-send. A turn that ends in the instant between that check and delivery can still
-be restarted by the reminder; this small window cannot be closed from a plugin.
+(once a bar exists, file reads are not counted). A reminder is accepted into
+the running turn, but some providers (observed: Claude Code, OpenCode) show it
+to the agent only at the next boundary; after a finished answer that is too late and causes a second, needless
+answer. So since 0.6.2 it is sent only once the next work call has begun after
+the threshold (starting `plan_progress` or `ToolSearch` does not count). If that
+call is the last and quick, the reminder can still arrive after the answer.
+Separately, BB's API has no way to send "only into a running turn": a steering
+message sent to an idle thread starts a turn. So the plugin checks that the
+thread is still running right before the send. A turn that ends in the instant
+between that check and delivery can still be restarted by the reminder; this
+rare window cannot be closed from a plugin.
 Model compliance still
 cannot be guaranteed; this is not a universal gate before every work tool.
 The original tool is isolated only for the known `plan-progress@zycck-mods` id.
@@ -79,6 +85,12 @@ host on 2026-10-27; Claude Desktop's window was not opened during that check.
 Claude Desktop's GUI was not driven in these checks: the native
 plugin list confirms enabled in an ordinary launch, disabled in the BB launch,
 with the settings file unchanged.
+
+### 0.6.2: fix
+
+- The automatic reminder no longer arrives after a finished answer: it is sent
+  only when a next work call has begun after the threshold was reached. Older
+  saved reminder state is read as before.
 
 ### 0.6.1: fixes
 

@@ -48,11 +48,21 @@ export function progressOutcome(event: unknown): "completed" | "failed" | "unkno
 
 // Only main-agent completed tool calls count. Subagents have their own progress.
 export function progressSource(event: unknown): ProgressSource {
+  return sourceOf(event, "item/completed");
+}
+
+/** Same recognition for the start of a call (no result yet, so an ACP code
+ * wrapper cannot be looked into). Never feeds the diagnostic. */
+export function startedProgressSource(event: unknown): ProgressSource {
+  return sourceOf(event, "item/started");
+}
+
+function sourceOf(event: unknown, type: "item/completed" | "item/started"): ProgressSource {
   const row = event as { type?: string; data?: { item?: {
     type?: string; tool?: string; server?: string; result?: unknown;
     presentation?: {icon?: {glyph?: string}};
   } } } | null;
-  if (row?.type !== "item/completed" || !isMainEvent(row)) return null;
+  if (row?.type !== type || !isMainEvent(row)) return null;
   const item = row.data?.item;
   if (item?.type !== "toolCall") return null;
   const batch = batchProgress(row);

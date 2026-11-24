@@ -113,9 +113,14 @@ in place, file reads do not count). The attempt
 survives plugin reload. A missing start or unexpected scope can suppress it;
 legacy unscoped data uses a fallback without root identity. Diagnose distinguishes
 not-attempted, unknown, sent, send-error and skipped; sent is not proof the model
-followed it. It is sent only after a fresh check that the turn is still running;
-a turn ending in the instant before delivery can still be restarted by it. This improves compliance rather
-than guaranteeing it.
+followed it. A reminder is accepted into the running turn, but the provider can
+show it to the agent only at the next boundary, so it is sent only once the
+next work call has begun after the threshold (starting `plan_progress` or
+`ToolSearch` does not count). If that call is the last and quick, the reminder
+can still arrive after the final answer. It is also sent only after a fresh
+check that the turn is still running; a turn ending in the instant before
+delivery can still be restarted by it, a separate and rare case. This improves
+compliance rather than guaranteeing it.
 
 The appearance rule is explained in the README and settings, including before
 the first bar. Keep the progress banner compact, without a help section.

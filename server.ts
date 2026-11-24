@@ -99,7 +99,6 @@ const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress t
 - A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]} (steps may be plain strings). 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
 - Before asking the user a question: {id, state:"needs_input", note}; an accepted human answer clears it; an explicit op also resumes. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
-- An op with none of stages, steps, next, done, active, failed, state, note, title, kind is refused; unknown fields are ignored with a warning.
 - When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
 - If a call result is lost, do not blindly repeat next:true: it advances again. Read bb plan-progress show --json once, then update named steps using done/active. Never invent tool names.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.

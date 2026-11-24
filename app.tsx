@@ -798,6 +798,8 @@ function Banner() {
   // the clock runs for an open visible plan, a running helper, or a finished plan auto-close may still hide
   const now = useNow(
     bars.some(bar => bar.hidden === undefined && bar.state !== "done") || hasRunningAgents === true ||
+    // a finished helper leaves the list by the clock (see visibleAgents)
+    allAgents.some(agent => agent.state === "done" && Date.now() - (agent.endedAt ?? agent.startedAt) < AGENT_KEEP_MS) ||
     (options.autoClose && bars.some(bar => bar.state === "done" && bar.hidden === undefined &&
       bar.endedAt !== undefined && bar.autoCloseHandledAt !== bar.endedAt)));
   const setVisibility = useCallback(async (id: string, hidden: boolean, endedAt?: number) => {

@@ -86,7 +86,8 @@ with the settings file unchanged.
 - An op with none of the known fields (for example `{id}`) is refused and no
   longer clears a waiting question; other unknown fields are ignored and named
   in the answer. A plan sent without steps names the format instead of "No bar".
-  A title shared by several finished steps is refused as ambiguous.
+  Reopening (`active`, `failed`) a title shared by several finished steps is
+  refused as ambiguous; `done` on them changes nothing, as before.
 - Steps may be plain strings and a stage may say `title` (from the original's
   commit aa1c260).
 - `bb plan-progress` understands `--thread=ID`, and refuses unknown options and

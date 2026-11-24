@@ -164,14 +164,14 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
     if (step.status !== "active") reopen(step, "active");
   };
   // a title used twice means the one still open
-  const find = (title: string) => {
+  const find = (title: string, reopening = false) => {
     // stored titles are clipped, so the asked one is clipped the same way
     const asked = clip(title, LIMITS.step);
     const matches = steps.filter((step) => same(step.title, asked));
     const found = matches.find((step) => !isFinished(step.status)) ?? matches[0];
     if (found === undefined) missing.push(title);
-    // every match is finished and there are several: reopening the first would be a guess
-    else if (matches.length > 1 && isFinished(found.status)) {
+    // reopening one of several finished steps would be a guess; finishing a finished one changes nothing
+    else if (reopening && matches.length > 1 && isFinished(found.status)) {
       ambiguous.push(title);
       return undefined;
     }
@@ -208,7 +208,7 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
   }
 
   if (named) {
-    const target = find(op.active!);
+    const target = find(op.active!, true);
     if (target !== undefined) {
       const at = steps.indexOf(target);
       // steps active before it count as done; pending and error ones stay as they were
@@ -222,7 +222,7 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
   }
 
   if (typeof op.failed === "string") {
-    const step = find(op.failed);
+    const step = find(op.failed, true);
     if (step !== undefined) reopen(step, "error");
   }
 

@@ -18,7 +18,8 @@ request description, not repeated here.
   loose zod object so extra keys reach the plugin instead of being dropped.
 - A plan sent without steps answers with the format ("could not read the
   breakdown"); a bare op on a missing bar still says "No bar".
-- A title shared by several finished steps is refused as ambiguous.
+- `active`/`failed` on a title shared by several finished steps is refused as
+  ambiguous; `done` on such titles stays a harmless no-op.
 - `bb plan-progress`: `--thread=ID`, unknown options and stray words. BB leaves
   argv parsing to a hand-written plugin `run`, so this is parsed in the plugin.
 - Answer evidence is read only while a plan waits on a person; a failed bar read

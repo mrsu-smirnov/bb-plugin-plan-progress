@@ -300,3 +300,18 @@ test("steps may be plain strings, a stage may call its name title, a flat list m
   assert.deepEqual(statuses(flat), ["active", "pending", "pending"]);
   assert.equal(flat.kind, "todo");
 });
+
+test("a closing done op over repeated finished titles still succeeds and changes nothing", () => {
+  const twoStages = { id: "c", title: "Закрытие", stages: [
+    { name: "S1", steps: [{ title: "Код" }, { title: "Тесты" }] },
+    { name: "S2", steps: [{ title: "Док" }, { title: "Тесты" }] }] };
+  const finished = run([twoStages, { id: "c", done: ["Код", "Тесты", "Док", "Тесты"] }]);
+  assert.equal(finished.bar.state, "done");
+  const closing = applyOp(finished.bars, { id: "c", done: ["Код", "Тесты", "Док", "Тесты"], state: "done" }, 9000);
+  assert.ok(closing.ok, closing.error);
+  assert.equal(closing.bar.state, "done");
+  assert.deepEqual(statuses(closing.bar), ["done", "done", "done", "done"]);
+  const single = applyOp(finished.bars, { id: "c", done: ["Тесты"] }, 9001);
+  assert.ok(single.ok, single.error);
+  assert.deepEqual(statuses(single.bar), ["done", "done", "done", "done"]);
+});

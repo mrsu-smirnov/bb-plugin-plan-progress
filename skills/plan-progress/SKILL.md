@@ -47,8 +47,8 @@ the plan grown by a step keeps what was done; one under another title, or
 without a step it finished, is the next task and starts from zero.
 
 A title the bar does not have is refused with the bar's step list. A title
-used twice means the one still open; if all of them are finished, the op is
-refused as ambiguous. Titles compare without case. An op with none of `stages`,
+used twice means the one still open; `active`/`failed` on a title whose steps
+are all finished is refused as ambiguous (`done` on them changes nothing). Titles compare without case. An op with none of `stages`,
 `steps`, `next`, `done`, `active`, `failed`, `state`, `note`, `title`, `kind` is
 refused and changes nothing; any other field is ignored, and the answer says so.
 

@@ -43,8 +43,10 @@ export interface StepInput {
 }
 
 export interface StageInput {
-  name: string;
-  steps: StepInput[];
+  /** A stage may call its name "title". */
+  name?: string;
+  title?: string;
+  steps: Array<StepInput | string>;
 }
 
 export interface Op {
@@ -53,7 +55,7 @@ export interface Op {
   kind?: "plan" | "todo";
   stages?: StageInput[];
   /** A flat list: shorthand for one unnamed stage (kind "todo"). */
-  steps?: StepInput[];
+  steps?: Array<StepInput | string>;
   next?: boolean;
   done?: string[];
   active?: string;
@@ -65,6 +67,15 @@ export interface Op {
 export type ApplyResult =
   | { ok: true; bars: Bar[]; bar: Bar }
   | { ok: false; error: string };
+
+/** Every field of an op that does something; any other key is ignored. */
+export const OP_ACTIONS = ["stages", "steps", "next", "done", "active", "failed", "state", "note", "title", "kind"] as const;
+const OP_FIELDS: readonly string[] = ["id", ...OP_ACTIONS];
+
+/** Keys of a raw op that this protocol does not know. */
+export function unknownFields(raw: object): string[] {
+  return Object.keys(raw).filter((name) => !OP_FIELDS.includes(name));
+}
 
 export const LIMITS = {
   barsPerThread: 100,
@@ -133,10 +144,11 @@ const copyStages = (stages: readonly Stage[]): Stage[] =>
   stages.map((stage) => ({ ...stage, steps: stage.steps.map((step) => ({ ...step })) }));
 
 /** Short ops against the plan: next, done, active, failed. Titles not found come back in `missing`. */
-function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[]; missing: string[] } {
+function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[]; missing: string[]; ambiguous: string[] } {
   const stages = copyStages(base);
   const steps = stages.flatMap((stage) => stage.steps);
   const missing: string[] = [];
+  const ambiguous: string[] = [];
   const finish = (step: Step) => {
     if (isFinished(step.status)) return;
     step.status = "done";
@@ -155,16 +167,22 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
   const find = (title: string) => {
     // stored titles are clipped, so the asked one is clipped the same way
     const asked = clip(title, LIMITS.step);
-    const found =
-      steps.find((step) => same(step.title, asked) && !isFinished(step.status)) ??
-      steps.find((step) => same(step.title, asked));
+    const matches = steps.filter((step) => same(step.title, asked));
+    const found = matches.find((step) => !isFinished(step.status)) ?? matches[0];
     if (found === undefined) missing.push(title);
+    // every match is finished and there are several: reopening the first would be a guess
+    else if (matches.length > 1 && isFinished(found.status)) {
+      ambiguous.push(title);
+      return undefined;
+    }
     return found;
   };
   const named = typeof op.active === "string";
 
   if (op.next === true) {
     let at = steps.findIndex((step) => step.status === "active");
+    // after a failure the step that failed is the one this call closes
+    if (at === -1) at = steps.findIndex((step) => step.status === "error");
     if (at === -1) at = steps.findIndex((step) => !isFinished(step.status));
     const current = steps[at];
     if (current !== undefined) finish(current);
@@ -208,7 +226,7 @@ function applyOps(base: readonly Stage[], op: Op, now: number): { stages: Stage[
     if (step !== undefined) reopen(step, "error");
   }
 
-  return { stages, missing };
+  return { stages, missing, ambiguous };
 }
 
 /** A resent plan keeps what was finished, matched by title. */
@@ -270,19 +288,24 @@ function isNextTask(prev: Bar, title: string, stages: Stage[]): boolean {
   );
 }
 
+const asSteps = (list: ReadonlyArray<StepInput | string>): StepInput[] =>
+  list.flatMap((step) => (typeof step === "string" ? [{ title: step }] : step && typeof step === "object" ? [step] : []));
+
 function buildStages(op: Op): Stage[] | string {
   const input: StageInput[] =
     op.stages ?? (op.steps === undefined ? [] : [{ name: "", steps: op.steps }]);
   if (input.length > LIMITS.stages) return `At most ${LIMITS.stages} stages.`;
   const stages: Stage[] = [];
   for (const stage of input) {
-    if (stage.steps.length > LIMITS.stepsPerStage) {
-      return `Stage "${clip(stage.name, 60)}" has more than ${LIMITS.stepsPerStage} steps.`;
+    const stageName = stage.name ?? stage.title;
+    const listed = asSteps(stage.steps ?? []);
+    if (listed.length > LIMITS.stepsPerStage) {
+      return `Stage "${clip(stageName, 60)}" has more than ${LIMITS.stepsPerStage} steps.`;
     }
-    if (stage.steps.length === 0) continue;
+    if (listed.length === 0) continue;
     stages.push({
-      name: op.stages === undefined ? "" : clip(stage.name, LIMITS.title) || "Stage",
-      steps: stage.steps.map((step) => ({
+      name: op.stages === undefined ? "" : clip(stageName, LIMITS.title) || "Stage",
+      steps: listed.map((step) => ({
         title: clip(step.title, LIMITS.step) || "Step",
         status: stepStatusOf(step.status),
       })),
@@ -301,6 +324,9 @@ function placeBar(list: readonly Bar[], next: Bar): Bar[] {
 export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult {
   const id = clip(op.id, 64);
   if (id === "") return { ok: false, error: "id is required." };
+  if (!OP_ACTIONS.some((name) => op[name] !== undefined)) {
+    return { ok: false, error: `Nothing to do for "${id}": the op has none of ${OP_ACTIONS.join(", ")}. The bar is unchanged.` };
+  }
   const prev = bars.find((bar) => bar.id === id) ?? null;
   if (prev === null && bars.length >= LIMITS.barsPerThread) {
     return { ok: false, error: `This thread already keeps ${LIMITS.barsPerThread} plans. Existing plans remain updatable. Use a new thread or explicitly clear old plans with bb plan-progress clear.` };
@@ -310,6 +336,13 @@ export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult 
   if (typeof sent === "string") return { ok: false, error: sent };
   const isPartial = sent.length === 0 && prev !== null;
   if (sent.length === 0 && prev === null) {
+    // a plan that was sent but holds no steps is a format problem, not a missing bar
+    if (op.stages !== undefined || op.steps !== undefined) {
+      return {
+        ok: false,
+        error: `Could not read the breakdown for "${id}": it has no steps. Send {id, title, stages:[{name, steps:[{title}]}]}; steps may be plain strings.`,
+      };
+    }
     const known = bars.map((bar) => `"${bar.id}"`).join(", ");
     return {
       ok: false,
@@ -322,7 +355,7 @@ export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult 
   // the next task under a finished bar's id carries nothing over; the same plan grown by a step does
   const was = prev !== null && !isPartial && isNextTask(prev, sentTitle, sent) ? null : prev;
   const base = isPartial ? prev!.stages : pointAt(was !== null ? carryDone(sent, was.stages) : sent, now);
-  const { stages, missing } = applyOps(base, op, now);
+  const { stages, missing, ambiguous } = applyOps(base, op, now);
   if (missing.length > 0) {
     const titles = allSteps({ stages })
       .map((step) => `"${step.title}"`)
@@ -330,6 +363,13 @@ export function applyOp(bars: readonly Bar[], op: Op, now: number): ApplyResult 
     return {
       ok: false,
       error: `Bar "${id}" has no step ${missing.map((title) => `"${clip(title, 60)}"`).join(", ")}. Its steps: ${titles}`,
+    };
+  }
+
+  if (ambiguous.length > 0) {
+    return {
+      ok: false,
+      error: `Bar "${id}" has several finished steps named ${ambiguous.map((title) => `"${clip(title, 60)}"`).join(", ")}; it is unclear which one is meant. Give the steps distinct titles.`,
     };
   }
 

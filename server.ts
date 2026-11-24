@@ -14,6 +14,7 @@ import {
   STATE_NAMES,
   stateOf,
   setVisibility,
+  unknownFields,
   STEP_NAMES,
   type Bar,
   type Op,
@@ -56,22 +57,29 @@ export const rpcContract = defineRpcContract({
   },
 });
 
-const stepSchema = z.object({
-  title: z.string().min(1),
-  status: z.enum(STEP_NAMES).optional(),
-});
+const stepSchema = z.union([
+  z.string().min(1),
+  z.object({
+    title: z.string().min(1),
+    status: z.enum(STEP_NAMES).optional(),
+  }),
+]);
 
-const opSchema = z.object({
+// Loose on purpose: unknown keys must reach apply(), which reports them
+// instead of silently dropping them.
+const opSchema = z.looseObject({
   id: z.string().min(1).describe('One id per task, e.g. "auth".'),
   title: z
     .string()
     .optional()
-    .describe("Bar title, at most 4 words, in the user's language. Required on create."),
+    .describe("Bar title, at most 4 words, in the user's language. Give it when you create the bar."),
   kind: z.enum(["plan", "todo"]).optional(),
   stages: z
-    .array(z.object({ name: z.string(), steps: z.array(stepSchema) }))
+    .array(
+      z.object({ name: z.string().optional(), title: z.string().optional(), steps: z.array(stepSchema) }),
+    )
     .optional()
-    .describe("The whole plan: 2-7 stages of short steps. Resend to change the plan."),
+    .describe("The whole plan: 2-7 stages of short steps (titles or plain strings). Resend to change the plan."),
   steps: z.array(stepSchema).optional().describe("A flat list instead of stages."),
   next: z.boolean().optional().describe("Active step done, next one active."),
   done: z.array(z.string()).optional().describe("Step titles to mark done."),
@@ -88,9 +96,10 @@ const INSTRUCTIONS = `Show progress on multi-step work with BB's plan_progress t
 - REQUIRED: for 3 or more requested actions, create the BB bar BEFORE the first work tool call. Read-only work counts. Reading three files counts. A task finished in one turn still counts. "No subagents" does not forbid a progress bar: the bar is UI bookkeeping, not a subagent or a workspace edit. Do not reinterpret three explicit steps as a one-step answer.
 - In Claude Code, discover and use mcp__bb-bridge__plan_progress (ToolSearch: select:mcp__bb-bridge__plan_progress). Never use mcp__plan-progress__plan_progress: it belongs to the Claude Desktop plugin and cannot display a bar in BB. Other providers use their advertised BB plan_progress tool.
 - If the BB tool is missing or fails, use the same operation with bb plan-progress op '<json>' in the current thread. If that also fails, report the failure; do not silently use the Desktop plugin.
-- A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]}. 2-7 stages, titles of at most 4 words, in the user's language.
+- A task of 3+ steps: before starting, create a bar once: {id, title, stages:[{name, steps:[{title}]}]} (steps may be plain strings). 2-7 stages, titles of at most 4 words, in the user's language.
 - Then move it with short ops only: {id, next:true} after each step; {id, done:["A"], active:"B"} to jump.
 - Before asking the user a question: {id, state:"needs_input", note}; an accepted human answer clears it; an explicit op also resumes. On an error: {id, failed:"<step>", note}; the next {id, next:true} closes that step.
+- An op with none of stages, steps, next, done, active, failed, state, note, title, kind is refused; unknown fields are ignored with a warning.
 - When the task is finished, mark the completed step titles with done, then state:"done" (these may be one op). state:"done" alone closes the bar but does not mark unfinished steps done; do not leave a completed task at 2/3. Any call without a state works the state out again.
 - If a call result is lost, do not blindly repeat next:true: it advances again. Read bb plan-progress show --json once, then update named steps using done/active. Never invent tool names.
 - The plan changed: resend stages under the same id and title; finished steps keep their done by title.
@@ -309,11 +318,16 @@ export default async function plugin(bb: BbPluginApi) {
       lastOperations.set(threadId, {at: Date.now(), route, ok: null});
       await writeBars(threadId, result.bars);
       lastOperations.set(threadId, {at: Date.now(), route, ok: true});
+      const ignored = unknownFields(op);
       diagnostics.set(threadId, { source: "bb", lastCallSeq: diagnostics.get(threadId)?.lastCallSeq ?? 0, warning: null });
       const reminder = reminderStates.get(threadId);
       if (reminder) { reminder.hasPlan = true; reminder.sinceUpdate = 0; }
       bb.realtime.publish(DIAGNOSTICS_CHANGED, { threadId });
-      return { ok: true, text: `BB/${threadId}: ${describe(result.bar)}` };
+      return {
+        ok: true,
+        text: `BB/${threadId}: ${describe(result.bar)}` +
+          (ignored.length > 0 ? ` (ignored unknown field(s): ${ignored.join(", ")})` : ""),
+      };
     });
   }
 

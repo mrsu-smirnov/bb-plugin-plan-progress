@@ -245,3 +245,58 @@ test("naming the active step again keeps its clock", () => {
   const { bar } = run([plan, { id: "auth", active: "Таблицы" }]);
   assert.equal(bar.stages[0].steps[0].startedAt, 1000);
 });
+
+const abc = { id: "f", title: "Три", steps: [{ title: "A" }, { title: "B" }, { title: "C" }] };
+
+test("next after failed closes the failed step, not an earlier open one", () => {
+  const open = { id: "f", title: "Три", steps: [{ title: "A" }, { title: "B", status: "active" }, { title: "C" }] };
+  const { bar } = run([open, { id: "f", failed: "B" }, { id: "f", next: true }]);
+  assert.deepEqual(statuses(bar), ["pending", "done", "active"]);
+});
+
+test("next after failed with A done, B failed, C pending keeps the usual result", () => {
+  const { bar } = run([abc, { id: "f", next: true }, { id: "f", failed: "B" }, { id: "f", next: true }]);
+  assert.deepEqual(statuses(bar), ["done", "done", "active"]);
+});
+
+test("an op with no known action is refused and leaves a question standing", () => {
+  const { bars } = run([plan, { id: "auth", state: "needs_input", note: "?" }]);
+  for (const op of [{ id: "auth" }, { id: "auth", complete: ["Таблицы"] }]) {
+    const result = applyOp(bars, op, 9000);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /none of stages, steps, next, done, active, failed, state, note, title, kind/);
+  }
+  const resumed = applyOp(bars, { id: "auth", state: "running" }, 9000);
+  assert.ok(resumed.ok);
+  assert.equal(resumed.bar.state, "running");
+});
+
+test("a plan sent without steps names the format; a bare op on a missing bar says no bar", () => {
+  for (const op of [{ id: "n", title: "T", stages: [{ name: "One", steps: [] }] }, { id: "n", title: "T", steps: [] }]) {
+    const result = applyOp([], op, 1);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /Could not read the breakdown/);
+  }
+  assert.match(applyOp([], { id: "nope", next: true }, 1).error, /No bar "nope"/);
+});
+
+test("a title shared by several finished steps is ambiguous; one match behaves as before", () => {
+  const twice = { id: "d", title: "Двойной", steps: [{ title: "X" }, { title: "X" }, { title: "Y" }] };
+  const { bars } = run([twice, { id: "d", done: ["X"] }, { id: "d", done: ["X"] }]);
+  for (const op of [{ id: "d", active: "X" }, { id: "d", failed: "X" }]) {
+    const result = applyOp(bars, op, 9000);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /several finished steps named "X"/);
+  }
+  const single = run([twice, { id: "d", done: ["Y"] }, { id: "d", active: "Y" }]).bar;
+  assert.equal(single.stages[0].steps[2].status, "active");
+});
+
+test("steps may be plain strings, a stage may call its name title, a flat list may mix both", () => {
+  const staged = run([{ id: "t", title: "Task", stages: [{ title: "One", steps: ["A", "B"] }, { name: "Two", steps: ["C"] }] }]).bar;
+  assert.deepEqual(statuses(staged), ["active", "pending", "pending"]);
+  assert.equal(staged.stages[0].name, "One");
+  const flat = run([{ id: "t", title: "Task", kind: "todo", steps: ["A", { title: "B" }, "C"] }]).bar;
+  assert.deepEqual(statuses(flat), ["active", "pending", "pending"]);
+  assert.equal(flat.kind, "todo");
+});

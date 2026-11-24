@@ -469,3 +469,40 @@ test('ACP caught inner failure remains failed in the public diagnostic', async (
     assert.equal(report.diagnostic.source,'bb');assert.equal(report.diagnostic.lastOutcome,'failed');
   }finally{await h.dispose();}
 });
+
+test("an op without a known action is refused by the tool and the CLI and keeps a question standing", async () => {
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress" });
+  try {
+    await plugin(bb);
+    await h.callAgentTool("plan_progress", { id: "q", title: "Ask", steps: ["A", "B"] });
+    await h.callAgentTool("plan_progress", { id: "q", state: "needs_input", note: "Which one?" });
+    for (const op of [{ id: "q" }, { id: "q", complete: ["A"] }]) {
+      const refused = await h.callAgentTool("plan_progress", op);
+      assert.equal(refused.isError, true);
+      assert.match(refused.content[0].text, /none of stages, steps, next/);
+      const cli = await h.runCli(["op", JSON.stringify(op)], { threadId: "thread-test" });
+      assert.equal(cli.exitCode, 1);
+      assert.match(cli.stderr, /none of stages, steps, next/);
+    }
+    const { bars } = await h.callRpc("bars_get", { threadId: "thread-test" });
+    assert.equal(bars[0].state, "needs_input");
+    assert.equal(bars[0].note, "Which one?");
+    const warned = await h.callAgentTool("plan_progress", { id: "q", next: true, complete: ["A"], other: 1 });
+    assert.match(warned, /ignored unknown field\(s\): complete, other/);
+    const viaCli = await h.runCli(["op", JSON.stringify({ id: "q", next: true, bogus: true })], { threadId: "thread-test" });
+    assert.equal(viaCli.exitCode, 0);
+    assert.match(viaCli.stdout, /ignored unknown field\(s\): bogus/);
+  } finally { await h.dispose(); }
+});
+
+test("the tool accepts plain-string steps and stage titles, and names an empty plan", async () => {
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress" });
+  try {
+    await plugin(bb);
+    assert.match(await h.callAgentTool("plan_progress", { id: "s", title: "T", stages: [{ title: "One", steps: ["A", "B"] }] }), /0\/2 done.*active: A/);
+    const empty = await h.callAgentTool("plan_progress", { id: "e", title: "T", stages: [{ name: "One", steps: [] }] });
+    assert.equal(empty.isError, true);
+    assert.match(empty.content[0].text, /Could not read the breakdown/);
+    assert.match(h.registrations.agentTools[0].instructions, /plain strings/);
+  } finally { await h.dispose(); }
+});

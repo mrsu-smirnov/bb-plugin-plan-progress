@@ -90,6 +90,13 @@ failing on the code before this change.
 - Delegations stay open until they complete, so a long-running subagent holds
   the reminder.
 
+**Live probes of the final 0.6.2 build** (BB 0.50.1, one run per case): Kimi
+through ACP received the reminder after the seventh command had completed, with
+no call running, and no command was interrupted; a three-command Kimi task got
+no reminder. Codex and OpenCode v2 behaved as before the change: reminder at the
+start of the seventh command, command not interrupted, seen before the final
+answer; short tasks got none. Not run: Pi, the second ACP provider, Claude Code.
+
 ## 0.6.1 changes
 
 Fix release; no new features. Test counts of this release are in the pull

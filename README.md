@@ -64,8 +64,8 @@ The agent receives an explicit rule for tasks with three or more actions,
 including read-only work. The plugin can send at most one automatic reminder
 per active turn after three work calls without a bar or six without an update
 (once a bar exists, file reads are not counted). A reminder is accepted into
-the running turn, but the provider can show it to the agent only at the next
-boundary; after a finished answer that is too late and causes a second, needless
+the running turn, but some providers (observed: Claude Code, OpenCode) show it
+to the agent only at the next boundary; after a finished answer that is too late and causes a second, needless
 answer. So since 0.6.2 it is sent only once the next work call has begun after
 the threshold (starting `plan_progress` or `ToolSearch` does not count). If that
 call is the last and quick, the reminder can still arrive after the answer.

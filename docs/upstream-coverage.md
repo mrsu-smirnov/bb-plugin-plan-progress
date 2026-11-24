@@ -29,13 +29,18 @@ host) that fail on the 0.6.1 logic.
 
 **Not checked**
 
-- Other providers: whether and when they show a steer message to the agent.
+- Other providers beyond single probes on 0.6.1: OpenCode v2 with Claude Haiku
+  showed the same late delivery (reminder accepted into the turn, shown after
+  the final answer); Codex showed the reminder before the final answer. One run
+  each; Pi not run.
 - A call that is last and quick can still receive the reminder after the answer.
 - The start of an ACP code wrapper (`execute`) counts as a work call; its
   inner calls are visible only at completion.
 - With `item/started` rows the 100-event window and 5-page read cover fewer
   turns than before.
-- No live run with a real agent.
+- No live run of 0.6.2 with a real agent before release; replaying the recorded
+  event logs through the new logic removed both late reminders and kept the
+  four timely ones.
 
 ## 0.6.1 changes
 

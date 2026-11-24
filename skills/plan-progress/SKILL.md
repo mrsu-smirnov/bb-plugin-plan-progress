@@ -20,12 +20,14 @@ Before closing, mark completed step titles done: `state:"done"` alone
 does not change unfinished step statuses.
 
 Create: `{id, title, stages:[{name, steps:[{title}]}]}`; `steps:[{title}]`
-instead of `stages` for one flat list. 2-7 stages, titles of at most 4 words,
+instead of `stages` for one flat list. Steps may be plain strings
+(`steps:["A","B"]`) and a stage may say `title` instead of `name`. A plan
+sent without any step is refused with the format. 2-7 stages, titles of at most 4 words,
 in the user's language, one `id` per task. A step's `status` defaults to
 `pending`; the first open step becomes active.
 
 Ops:
-- `{id, next:true}` — active step done, next one active (past the last step, the first one left open; with no active step, the first unfinished one, an error included, is the one closed)
+- `{id, next:true}` — active step done, next one active (past the last step, the first one left open; with no active step, the step that failed, else the first unfinished one, is the one closed)
 - `{id, done:["A"], active:"B"}` — mark done, pick current; steps *active* before B count as done, pending and error ones stay
 - `{id, done:["A"]}` on the active step moves on to the step after it, as `next` does
 - `{id, failed:"B", note}` — the step gets an error and the bar turns red; the next `next` closes it
@@ -45,7 +47,10 @@ the plan grown by a step keeps what was done; one under another title, or
 without a step it finished, is the next task and starts from zero.
 
 A title the bar does not have is refused with the bar's step list. A title
-used twice means the one still open. Titles compare without case.
+used twice means the one still open; if all of them are finished, the op is
+refused as ambiguous. Titles compare without case. An op with none of `stages`,
+`steps`, `next`, `done`, `active`, `failed`, `state`, `note`, `title`, `kind` is
+refused and changes nothing; any other field is ignored, and the answer says so.
 
 The result says `done/total, state, active step`; no need to check the bar.
 
@@ -85,8 +90,9 @@ Inside a thread (or with `--thread <id>`):
 
 The separate Thread agents block shows observed latest-segment delegations and
 direct child threads, even without a plan. Three rows are shown by default;
-expansion is saved per browser and thread. Confirmed errors and unknown outcomes
-remain visible while present in the source. Open approvals in the current
+expansion is saved per browser and thread. Confirmed errors are kept as a bounded
+trace (up to 100 per thread) and stay visible; unknown outcomes remain visible
+while present in the source. Open approvals in the current
 thread and its direct children are counted without assigning them to an agent.
 Fresh Claude and Pi-helper lifecycle coverage remains incomplete; see the
 0.6.0 verification table for the later Pi basic-flow checks.
@@ -98,14 +104,17 @@ launches. BB's Claude threads get a process-only override via a generated
 launcher; user and project settings files are never rewritten. `isolateClaude`
 defaults to true. For a custom native executable, set `claudeExecutable` to its
 absolute path on the host. Start a new thread to receive changed instructions.
-Windows has not yet been validated on a real host.
+The Windows launcher was run live on a Windows host on 2026-10-27; Claude
+Desktop's window was not opened during that check.
 
 `automaticReminders` defaults to true: one attempted strict steer per observed
-root turn after 3 work calls without a bar or 6 without an update. The attempt
+root turn after 3 work calls without a bar or 6 without an update (with a bar
+in place, file reads do not count). The attempt
 survives plugin reload. A missing start or unexpected scope can suppress it;
 legacy unscoped data uses a fallback without root identity. Diagnose distinguishes
 not-attempted, unknown, sent, send-error and skipped; sent is not proof the model
-followed it. It never starts a follow-up turn. This improves compliance rather
+followed it. It is sent only after a fresh check that the turn is still running;
+a turn ending in the instant before delivery can still be restarted by it. This improves compliance rather
 than guaranteeing it.
 
 The appearance rule is explained in the README and settings, including before

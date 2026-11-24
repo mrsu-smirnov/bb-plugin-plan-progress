@@ -62,17 +62,41 @@ proof that an existing provider session was restarted with it.
 
 The agent receives an explicit rule for tasks with three or more actions,
 including read-only work. The plugin can send at most one automatic reminder
-per active turn after three work calls without a bar or six without an update.
-It uses strict steering and does not start another turn. Model compliance still
+per active turn after three work calls without a bar or six without an update
+(once a bar exists, file reads are not counted). BB's API has no way to send
+"only into a running turn": a steering message sent to an idle thread starts a
+turn. So the plugin checks that the thread is still running right before the
+send. A turn that ends in the instant between that check and delivery can still
+be restarted by the reminder; this small window cannot be closed from a plugin.
+Model compliance still
 cannot be guaranteed; this is not a universal gate before every work tool.
 The original tool is isolated only for the known `plan-progress@zycck-mods` id.
 An installation under another marketplace id requires separate configuration.
 
 Earlier isolation and basic progress features were validated on Linux with Claude Code, Codex, and Pi; this does not validate the new 0.5.0 event handling. The Windows launcher follows
-the Claude SDK's JavaScript executable contract, but has not been tested on a
-Windows host. Claude Desktop's GUI was not driven in these checks: the native
+the Claude SDK's JavaScript executable contract and was run live on a Windows
+host on 2026-10-27; Claude Desktop's window was not opened during that check.
+Claude Desktop's GUI was not driven in these checks: the native
 plugin list confirms enabled in an ordinary launch, disabled in the BB launch,
 with the settings file unchanged.
+
+### 0.6.1: fixes
+
+- `next` after `failed` closes the step that failed, not an earlier open one.
+- An op with none of the known fields (for example `{id}`) is refused and no
+  longer clears a waiting question; other unknown fields are ignored and named
+  in the answer. A plan sent without steps names the format instead of "No bar".
+  A title shared by several finished steps is refused as ambiguous.
+- Steps may be plain strings and a stage may say `title` (from the original's
+  commit aa1c260).
+- `bb plan-progress` understands `--thread=ID`, and refuses unknown options and
+  stray words, which used to be ignored (including by `clear`).
+- Answer evidence is read only while a plan waits on a person.
+- Reminders: a fresh running check right before sending; file reads no longer
+  count toward the "six calls without an update" rule once a bar exists.
+- Interface: no auto-hide before the helper list has loaded; the one-second
+  clock runs only while something can change; a finished bar stands still; a
+  skipped step is dimmed and struck through; counters count what is shown.
 
 ### 0.6.0: compatibility and reliable reminders
 

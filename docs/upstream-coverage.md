@@ -4,6 +4,52 @@ The detailed baseline inventory below describes **released BB 0.4.0**, not an
 assertion that every difference is still present in later releases. Keep this inventory
 available as a current document instead of relying on old Git history.
 
+## 0.6.1 changes
+
+Fix release; no new features. Test counts of this release are in the pull
+request description, not repeated here.
+
+**Fixed**
+
+- `next` after `failed` closes the failed step (it used to close an earlier
+  open one and leave the failed one in error).
+- An op with no known action is refused and does not touch the bar; unknown
+  extra fields are ignored and named in the answer. The tool schema is now a
+  loose zod object so extra keys reach the plugin instead of being dropped.
+- A plan sent without steps answers with the format ("could not read the
+  breakdown"); a bare op on a missing bar still says "No bar".
+- A title shared by several finished steps is refused as ambiguous.
+- `bb plan-progress`: `--thread=ID`, unknown options and stray words. BB leaves
+  argv parsing to a hand-written plugin `run`, so this is parsed in the plugin.
+- Answer evidence is read only while a plan waits on a person; a failed bar read
+  in the event handler is logged.
+- Reminders: a fresh thread-status and `turn/completed` check right before the
+  send; file reads do not count toward the six-call rule once a bar exists.
+- Interface: auto-hide waits for the helper list, the clock runs only while
+  something can change, a finished bar's animations are paused, skipped steps
+  are dimmed and struck through, counters count what is shown.
+
+**Carried over from the original (commit aa1c260)**
+
+Plain-string steps (in stages and in a flat list), `title` as a stage name, and
+the "could not read the breakdown" message. The three regression cases of the
+author are covered by our engine and integration tests. Not carried over: the
+original's flat-list stage name "Tasks" (we keep an unnamed stage) and substeps.
+
+**Checked** by unit, integration (built plugin in the SDK fake host) and UI
+(jsdom) tests that failed before each change and pass after it.
+
+**Not checked**
+
+- The reminder race (turn ending between the final check and delivery) is
+  narrowed, not closed: the SDK send has no "only into a running turn" option
+  or expected turn id for plugins. A `message.dispatch` hook that rejects a
+  plugin-originated start-turn dispatch was read in the types but not tried.
+- Whether BB's real tool host passes unknown keys through to the plugin (the
+  SDK test host does); live agent calls were not made.
+- Animation behaviour and counters in a real BB window; only jsdom was used.
+- Windows, Claude Code, and the other live connections listed for 0.6.0.
+
 ## 0.6.0 changes and verification
 
 Version 0.6.0 adds scope-aware routing/reminders, observed failure outcomes,

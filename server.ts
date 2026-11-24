@@ -371,6 +371,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
   async function refreshAnswers(threadId: string): Promise<void> {
     try {
+      // events are read only for a thread that has a plan waiting on a person
+      if (!(await readBars(threadId)).some(bar => bar.state === "needs_input")) return;
       const events = await recentEvents(threadId, ["client/turn/requested", "turn/input/accepted"]);
       const times = acceptedHumanRequests(events);
       if (!times.length) return;
@@ -494,7 +496,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.events.on("experimental_thread.events", ({ thread }) => {
     invalidate(thread.id);
     if (observedAgentThreads.has(thread.id)) void refreshAgents(thread.id);
-    void readBars(thread.id).then(bars => { if (bars.some(bar => bar.state === "needs_input")) void refreshAnswers(thread.id); });
+    void refreshAnswers(thread.id);
     if (thread.parentThreadId) { updateChild(thread.parentThreadId, thread); snapshots.delete(`${thread.parentThreadId}:agents`); void refreshAgents(thread.parentThreadId); }
   });
   bb.events.on("experimental_thread.events", ({ thread }) => {
@@ -690,22 +692,32 @@ export default async function plugin(bb: BbPluginApi) {
       },
     ],
     async run(argv, ctx) {
-      const json = argv.includes("--json");
-      const flag = argv.indexOf("--thread");
-      const value = flag === -1 ? undefined : argv[flag + 1];
-      if (flag !== -1 && (value === undefined || value.startsWith("--"))) {
-        return { exitCode: 1, stderr: "--thread needs a thread id: --thread <id>." };
+      let json = false;
+      let flagThread: string | undefined;
+      const rest: string[] = [];
+      for (let index = 0; index < argv.length; index++) {
+        const arg = argv[index]!;
+        if (arg === "--json") json = true;
+        else if (arg === "--thread" || arg.startsWith("--thread=")) {
+          const value = arg === "--thread" ? argv[++index] : arg.slice("--thread=".length);
+          if (value === undefined || value === "" || value.startsWith("--")) {
+            return { exitCode: 1, stderr: "--thread needs a thread id: --thread <id> or --thread=<id>." };
+          }
+          flagThread = value;
+        } else if (arg.startsWith("--") && arg !== "--help") {
+          return { exitCode: 1, stderr: `Unknown option ${arg}.\n${usage}` };
+        } else rest.push(arg);
       }
-      const threadId = flag === -1 ? ctx.threadId : value;
-      const rest = argv.filter(
-        (arg, index) => arg !== "--json" && (flag === -1 || (index !== flag && index !== flag + 1)),
-      );
+      const threadId = flagThread ?? ctx.threadId;
       const [command, ...params] = rest;
       if (command === undefined || command === "help" || command === "--help") {
         return { exitCode: 0, stdout: usage };
       }
       if (threadId === undefined || threadId === "") {
         return { exitCode: 1, stderr: "No thread: run it inside a thread or pass --thread <id>." };
+      }
+      if (command !== "op" && params.length > 0) {
+        return { exitCode: 1, stderr: `Unexpected argument${params.length > 1 ? "s" : ""}: ${params.join(" ")}.\n${usage}` };
       }
       switch (command) {
         case "diagnose": {

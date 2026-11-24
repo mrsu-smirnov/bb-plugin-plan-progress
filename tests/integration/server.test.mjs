@@ -506,3 +506,49 @@ test("the tool accepts plain-string steps and stage titles, and names an empty p
     assert.match(h.registrations.agentTools[0].instructions, /plain strings/);
   } finally { await h.dispose(); }
 });
+
+test("CLI reads --thread=ID like --thread ID, rejects stray words and options, and clear obeys the thread", async () => {
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress" });
+  try {
+    await plugin(bb);
+    const op = JSON.stringify({ id: "p", title: "P", steps: ["A", "B"] });
+    assert.equal((await h.runCli(["op", op, "--thread=other"], { threadId: "mine" })).exitCode, 0);
+    assert.equal((await h.runCli(["op", op, "--thread", "mine"], { threadId: "mine" })).exitCode, 0);
+    assert.equal(JSON.parse((await h.runCli(["show", "--json", "--thread=other"], { threadId: "mine" })).stdout).length, 1);
+    for (const argv of [["show", "--bogus"], ["show", "extra"], ["clear", "now"], ["show", "--thread="], ["show", "--thread"]]) {
+      const result = await h.runCli(argv, { threadId: "mine" });
+      assert.equal(result.exitCode, 1, argv.join(" "));
+    }
+    assert.match((await h.runCli(["show", "--bogus"], { threadId: "mine" })).stderr, /Unknown option --bogus/);
+    assert.equal((await h.runCli(["clear", "--thread=other"], { threadId: "mine" })).exitCode, 0);
+    assert.equal((await h.runCli(["show", "--thread=other"], { threadId: "mine" })).stdout, "No bars.");
+    assert.notEqual((await h.runCli(["show"], { threadId: "mine" })).stdout, "No bars.");
+  } finally { await h.dispose(); }
+});
+
+test("answer evidence is read only while a plan waits on a person, and a failed read is only logged", async () => {
+  let reads = 0;
+  const { bb, harness: h } = createFakePluginHost({ pluginId: "plan-progress",
+    sdk: { threads: { events: { list: async (args) => { if (args.types?.includes("turn/input/accepted")) reads++; return []; } } } } });
+  try {
+    await plugin(bb);
+    await h.callAgentTool("plan_progress", { id: "w", steps: ["A", "B"] });
+    await h.emitThreadEvent("experimental_thread.events", { thread: { id: "thread-test" } });
+    await h.callRpc("bars_get", { threadId: "thread-test" });
+    assert.equal(reads, 0);
+    await h.callAgentTool("plan_progress", { id: "w", state: "needs_input", note: "?" });
+    await h.callRpc("bars_get", { threadId: "thread-test" });
+    assert.ok(reads > 0);
+    const rejections = [];
+    const record = (error) => rejections.push(error);
+    process.on("unhandledRejection", record);
+    try {
+      const get = bb.storage.kv.get;
+      bb.storage.kv.get = async () => { throw new Error("kv down"); };
+      await h.emitThreadEvent("experimental_thread.events", { thread: { id: "thread-test" } });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      bb.storage.kv.get = get;
+    } finally { process.off("unhandledRejection", record); }
+    assert.deepEqual(rejections, []);
+  } finally { await h.dispose(); }
+});

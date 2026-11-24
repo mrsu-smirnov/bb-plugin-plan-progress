@@ -1,4 +1,4 @@
-import { isMainEvent, progressSource, progressOutcome } from "./diagnostics.ts";
+import { isMainEvent, progressSource, startedProgressSource, progressOutcome } from "./diagnostics.ts";
 
 export interface ReminderState {
   since: number;
@@ -12,13 +12,26 @@ export interface ReminderState {
   rootConfirmed: boolean;
   delivery: "not-attempted" | "unknown" | "sent" | "send-error" | "skipped";
   attemptedAt: number | null;
+  /** seq at which the threshold was reached; null while below it. Absent in saved state from before 0.6.2. */
+  armedSeq?: number | null;
+  /** a main-thread work call began after armedSeq, so the turn is still going */
+  continued?: boolean;
 }
 export function newReminderState(now: number): ReminderState {
   return { since: now, lastSeq: 0, work: 0, sinceUpdate: 0, hasPlan: false, sent: false,
-    turnId: null, finished: false, rootConfirmed: false, delivery: "not-attempted", attemptedAt: null };
+    turnId: null, finished: false, rootConfirmed: false, delivery: "not-attempted", attemptedAt: null, armedSeq: null, continued: false };
+}
+
+const WORK_TYPES = ["fileRead", "fileChange", "commandExecution", "toolCall", "mcpToolCall"];
+const thresholdMet = (s: ReminderState) => (!s.hasPlan && s.work >= 3) || (s.hasPlan && s.sinceUpdate >= 6);
+// Arm when the threshold is first reached; disarm when it is no longer met.
+function arm(state: ReminderState, seq: number) {
+  if (!thresholdMet(state)) { state.armedSeq = null; state.continued = false; }
+  else if (state.armedSeq == null) { state.armedSeq = seq; state.continued = false; }
 }
 
 export function observeWork(state: ReminderState, events: unknown[]): boolean {
+  arm(state, state.lastSeq); // saved state from before 0.6.2 carries no armedSeq
   for (const event of events) {
     const row = event as { seq: number; createdAt: number; type: string;
       scope?: {kind?: string; turnId?: string};
@@ -41,20 +54,32 @@ export function observeWork(state: ReminderState, events: unknown[]): boolean {
     if (row.createdAt < state.since) continue;
     state.lastSeq = row.seq;
     if (row.type === "turn/completed") { state.finished = true; continue; }
+    if (row.type === "item/started") {
+      // The reminder is only worth sending when the work goes on: a provider
+      // hands it to the agent at the next boundary, after a final answer
+      // otherwise. A call that began before the threshold does not count.
+      const started = row.data?.item;
+      if (state.armedSeq != null && row.seq > state.armedSeq && started &&
+          started.tool !== "ToolSearch" && startedProgressSource(row) === null &&
+          WORK_TYPES.includes(started.type ?? "")) state.continued = true;
+      continue;
+    }
     const source = progressSource(row);
     if (source === "bb") {
       if (progressOutcome(row) === "completed") {
         state.hasPlan = true; state.sinceUpdate = 0;
+        arm(state, row.seq);
       }
       continue;
     }
     if (row.type !== "item/completed") continue;
     const item = row.data?.item;
     if (!item || item.tool === "ToolSearch" || source === "claude-original") continue;
-    if (!["fileRead", "fileChange", "commandExecution", "toolCall", "mcpToolCall"].includes(item.type ?? "")) continue;
+    if (!WORK_TYPES.includes(item.type ?? "")) continue;
     state.work++;
     // with a bar already there, reading is not work the bar has fallen behind on
     if (!(state.hasPlan && item.type === "fileRead")) state.sinceUpdate++;
+    arm(state, row.seq);
   }
-  return (state.turnId === null || state.rootConfirmed) && !state.finished && !state.sent && ((!state.hasPlan && state.work >= 3) || (state.hasPlan && state.sinceUpdate >= 6));
+  return (state.turnId === null || state.rootConfirmed) && !state.finished && !state.sent && thresholdMet(state) && state.continued === true;
 }
